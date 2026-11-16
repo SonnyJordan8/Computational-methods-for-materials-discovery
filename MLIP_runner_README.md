@@ -1,6 +1,6 @@
 # MLIP_runner.py
 
-**Role in the workflow:** the script you actually run. It holds the settings, calls the parser to load everything, then calls the processor functions in order for each material. It contains no physics of its own; it is the "recipe" that joins the other two files together.
+**Role in the workflow:** the script you actually run. It holds the settings, calls the parser to load everything, then calls the processor functions in order for each material.
 
 ```
 python MLIP_runner.py
@@ -11,20 +11,13 @@ MLIP_runner.py
    ├── imports from MLIP_parser.py     (folders, MODELS, cif_parser, reference_data_parser)
    └── imports from MLIP_processor.py  (relaxation, force constants, bands, CSV, plots)
 ```
-
-`MLIP_parser.py` and `MLIP_processor.py` never import each other. Everything passes through the runner.
-
----
-
 ## 1. What the file needs
 
 - `MLIP_parser.py` and `MLIP_processor.py` in the same folder.
 - `materials_cif/` with a CIF for every name in `MATERIALS`.
 - Optional: `phononDB/` and/or `reference_data/` for the reference comparison.
-- The Python environment for the chosen `MODEL` (e.g. `mace-torch` for MACE).
+- The conda environment for the chosen `MODEL` active (`mace-torch` for MACE, `prophet-mlip` for Prophet). The two models need separate environments; the install commands are in the top-level `README.md`.
 - Standard library `time` and `datetime`, plus `numpy`.
-
----
 
 ## 2. Settings
 
@@ -32,7 +25,7 @@ Change these at the top of the file before each run.
 
 | Setting | Current value | Meaning | Passed to |
 |---|---|---|---|
-| `MODEL` | `"MACE-MP-0-medium"` | Which MLIP to use. Must be a key of `MODELS` in the parser file | `MODELS[MODEL](DEVICE)`, `get_run_folder`, CSV |
+| `MODEL` | `"Prophet-OAME-MBD"` | Which MLIP to use. Must be a key of `MODELS` in the parser file, and must match the active conda environment | `MODELS[MODEL](DEVICE)`, `get_run_folder`, CSV |
 | `DEVICE` | `"cpu"` | `"cpu"` or `"cuda"` | the `make_...` function |
 | `SUPERCELL` | `2` | Supercell size N for an N×N×N supercell | `force_constant_calculator`, folder name, plot |
 | `DISPLACEMENT` | `0.03` | Finite displacement in Å | `force_constant_calculator`, folder name, plot |
@@ -46,10 +39,6 @@ Change these at the top of the file before each run.
 - `RUN_CALCULATIONS = True`, `RUN_PLOTS = True`: normal run.
 - `RUN_CALCULATIONS = False`, `RUN_PLOTS = True`: redraw the figures from saved results without loading a model. Fast, and does not need the MLIP installed.
 - Run once per `MODEL`. Each run adds that model to the results, and the plots pick up every model that has been run so far.
-
-**Good to know:** `IMAGINARY_LIMIT` is slightly negative rather than zero because the three acoustic modes at Γ should be exactly zero but come out as tiny positive or negative numbers from numerical noise.
-
----
 
 ## 3. Parse section (always runs)
 
@@ -83,8 +72,6 @@ references, reference_sources = reference_data_parser(
 
 Both steps run even when `RUN_CALCULATIONS = False`, because the plots need the structures (for the band path) and the references.
 
----
-
 ## 4. Calculations section (`if RUN_CALCULATIONS:`)
 
 ### Step 3: load the model (once)
@@ -93,9 +80,9 @@ Both steps run even when `RUN_CALCULATIONS = False`, because the plots need the 
 calc = MODELS[MODEL](DEVICE)
 ```
 
-The model is loaded once and reused for every material. The load time is measured and stored as `load_s`. Because it is shared, the same `load_s` value appears in every row of that run.
+The model is loaded once and reused for every material. The load is timed with `start_timer` and `performance_log` (material name `"all"`, stage `"model load"`), and the wall time is stored as `load_s`. Because it is shared, the same `load_s` value appears in every row of that run.
 
-**Relies on:** `MODELS` and the `make_...` functions (parser file).
+**Relies on:** `MODELS` and the `make_...` functions (parser file); `start_timer`, `performance_log` (processor file).
 
 ### Step 4: loop over the materials
 
@@ -110,6 +97,16 @@ Each material is run inside a `try / except`. A variable called `stage` is updat
 | 5 | `"band structure"` | Band path, bands, save, lowest frequency, Γ optical frequency | `get_band_path`, `band_calculator`, `save_bands`, `lowest_band_frequency`, `gamma_optical_frequency` | `bands`, `lowest_frequency`, `gamma_optical`, `imaginary_modes`, `bands_time` |
 | 6 | `"reference comparison"` | Γ optical frequency of the reference and the percentage difference | `gamma_optical_frequency` | `ref_gamma_optical`, `gamma_diff` |
 | 7 | `"saving results"` | Print a summary and add a row to `summary.csv` | `results_table` | one CSV row |
+
+**Timing.** The relaxation, force constants and band structure stages are each wrapped like this:
+
+```python
+timer = start_timer()
+...
+relax_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
+```
+
+Each call adds one row to `results/performance_log.csv` and returns the wall time, which goes into `summary.csv` as `relax_s`, `forces_s` or `bands_s`.
 
 **Details worth knowing for each step:**
 
@@ -146,6 +143,7 @@ except Exception as error:
 - The message is printed and a short row (date, material, model, supercell, displacement, status) is written to `summary.csv`.
 - The loop then moves on to the next material. One failure does not stop the run.
 - Files written before the crash (for example `relaxed.cif`) stay in the run folder.
+- The stage that crashed gets no row in `performance_log.csv`; stages that finished before it keep theirs.
 
 ---
 
@@ -166,13 +164,6 @@ One figure per material, in its own `try / except` so a plotting problem with on
 - `materials` and `references` from the parse section.
 - Results saved by this run or earlier runs.
 
-**Good to know:**
-- The plot is not limited to `MODEL`. It shows whatever is saved on disk for the current `SUPERCELL` and `DISPLACEMENT`.
-- The local variables `supercell` and `displacement` are just copies of `SUPERCELL` and `DISPLACEMENT`; the code uses a mix of both names.
-- The band path here (from the CIF) and the one in the calculation section (from the relaxed cell) give the same fractional q-points as long as the relaxation has not changed the lattice type.
-
----
-
 ## 6. What a run produces
 
 **Printed to the terminal:**
@@ -186,6 +177,7 @@ One figure per material, in its own `try / except` so a plotting problem with on
 ```
 results/
 ├── summary.csv                                   one row per material per run (appended)
+├── performance_log.csv                           one row per stage per run (appended)
 └── <material>/
     ├── band_comparison_sc<N>_d<disp>.png          all models + reference
     └── <MODEL>/sc<N>_d<disp>/
@@ -193,9 +185,6 @@ results/
         ├── phonopy_disp.yaml, phonopy_params.yaml stage 2
         └── band.yaml                              stage 3
 ```
-
----
-
 ## 7. Which function each step relies on
 
 | Runner step | Function | File | Needs on disk |
@@ -203,6 +192,7 @@ results/
 | Load structures | `cif_parser` | parser | `materials_cif/*.cif` |
 | Load references | `reference_data_parser` | parser | `phononDB/` (Kyoto database + lookup JSON) and/or `reference_data/*.yaml` |
 | Load model | `MODELS[MODEL]` → `make_mace` / `make_prophet` | parser | MACE download cache / `weights/prophet-oame-mbd.pt` |
+| Stage timing | `start_timer`, `performance_log` | processor | `results/performance_log.csv` |
 | Run folder | `get_run_folder` | processor | |
 | Primitive cell | `get_primitive_cell` | processor | |
 | Relaxation | `relax_structure` | processor | run folder |
@@ -215,24 +205,8 @@ results/
 | Load saved results | `phonon_loader` | processor | `results/<material>/<model>/.../phonopy_params.yaml` |
 | Figure | `plot_band_comparison` | processor | `results/<material>/` |
 
----
+## 8. Performance log
 
-## 8. Planned change: performance log
+Four stages are timed: the model load (once per run, material name `"all"`), and the relaxation, force constants and band structure of each material. Each one adds a row to `results/performance_log.csv` with the wall time, CPU time, cores used, cores available and CPU usage. The functions are described in section 9 of `MLIP_processor_README.md`.
 
-**Not in the file yet.** When `start_timer` and `performance_log` are added to the processor, each timing pair in the runner changes from
-
-```python
-start = time.time()
-...
-relax_time = time.time() - start
-```
-
-to
-
-```python
-timer = start_timer()
-...
-relax_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
-```
-
-for the model load (material name `"all"`), relaxation, force constants and band structure. This adds one row per stage to `results/performance_log.csv`. `summary.csv` is unaffected, and `import time` can then be removed from the runner.
+`summary.csv` keeps its four time columns (`load_s`, `relax_s`, `forces_s`, `bands_s`); they are the wall times returned by `performance_log`.
