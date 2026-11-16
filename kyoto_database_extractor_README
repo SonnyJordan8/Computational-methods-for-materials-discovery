@@ -67,22 +67,7 @@ The 10,034 materials arrive compressed in `phononDB/phonon_db_tarred/`. They mus
 
 Each archive is named like `materials-id-149-si-fd-3m-227.tar.lzma` and unpacks to one folder, `mp-149-20180417/`.
 
-**Option A: Python (any operating system).** Run from the project folder, in a new notebook cell or a script:
-
-```python
-import tarfile
-from pathlib import Path
-
-archives = sorted(Path("phononDB/phonon_db_tarred").glob("*.tar.lzma"))
-target = Path("phononDB/phonon_db")
-target.mkdir(exist_ok=True)
-for archive in archives:
-    with tarfile.open(archive, "r:xz") as tar:
-        tar.extractall(target, filter="data")
-print(f"extracted {len(archives)} archives")     # 10034
-```
-
-**Option B: the repository's own scripts.** Linux, macOS, or Git Bash / WSL on Windows:
+**The repository's own scripts.** Linux, macOS, or Git Bash / WSL on Windows:
 
 ```bash
 cd phononDB
