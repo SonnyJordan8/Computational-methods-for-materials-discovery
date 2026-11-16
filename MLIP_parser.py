@@ -12,9 +12,6 @@ REFERENCE_PHONOPY_PARAMS_FOLDER = Path(__file__).resolve().parent / "reference_d
 # Kyoto (Togo) phonon database, set up with Kyoto_database_extractor.ipynb
 PHONON_DB_FOLDER = Path(__file__).resolve().parent / "phononDB"
 
-# Molecule to constituent atoms mapper
-molecules = {"Si": {"Si"}, "GaAs": {"Ga", "As"}}
-
 def cif_parser(folder_path):
     """
     Parses every CIF file in the given folder (materials_cif).
