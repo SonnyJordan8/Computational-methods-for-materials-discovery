@@ -26,9 +26,10 @@ MODELS["name"](device) ──► make_mace / make_prophet ──► ASE calculat
 | `phonopy` | Loading reference phonon data as `Phonopy` objects |
 | `monty.serialization.loadfn` | Loading the phononDB lookup table (a JSON file that becomes a pandas DataFrame) |
 | `mace-torch` | Only when `make_mace` is called |
-| `prophet` | Only when `make_prophet` is called |
+| `prophet-mlip` (imported as `prophet`) | Only when `make_prophet` is called |
 
-`mace` and `prophet` are imported *inside* their functions, not at the top of the file. This means you can run the workflow with MACE in an environment where Prophet is not installed, and the other way round.
+`mace` and `prophet` are imported *inside* their functions, not at the top of the file. This means you can run the workflow with MACE in an environment where Prophet is not installed, and the other way round. In practice they have to be separate environments, because the two packages need different versions of `e3nn`. The install commands are in the top-level `README.md`.
+
 
 ### Folders and files on disk
 
@@ -43,7 +44,6 @@ All paths are relative to the folder that contains `MLIP_parser.py`.
 
 ### Other module-level names
 
-- `molecules = {"Si": {"Si"}, "GaAs": {"Ga", "As"}}` maps a material to its elements. **It is not used anywhere** in the three scripts at the moment.
 - `MODELS` is the calculator registry (see section 4).
 
 ---
@@ -99,8 +99,7 @@ reference_data_parser
 - 10,034 materials, each in a folder `phonon_db/mp-XXXX-20180417/`, keyed by Materials Project ID.
 - Each folder holds `phonon.yaml`, `FORCE_SETS`, and (for about half the materials) `BORN`.
 - `phonon_db_lookup_df.json` is the index. The columns this script uses are `material_id`, `formula_pretty_reduced`, `spacegroup_number` and `phonon_filepath`.
-- **The DFT functional is PBEsol, not PBE**, with no van der Waals correction. Keep this in mind when calling it "the reference".
-- **GaAs is not in this release.** For GaAs the workflow falls through to the `reference_data/` folder, or to no reference at all.
+- **The DFT functional is PBEsol, not PBE**
 
 ### `phonon_db_finder(material_name, structure, lookup, mp_ids)`
 
@@ -148,7 +147,8 @@ reference_data_parser
 
 **Good to know:**
 - `is_nac=False` means the `BORN` file is ignored, so there is **no LO/TO splitting** in the reference for polar materials (MgO, GaAs). This is deliberate for now, because the MLIP phonons have no Born charges either, so the two are compared like-for-like.
-- When Born charges are added later, pass `born_filename=<folder>/BORN` explicitly. phonopy will not find the `BORN` file on its own in this layout.
+- The folder name is taken from the `phonon_filepath` column with `Path(...).parent.name`. This works when the lookup table was built on the machine that is using it. A table holding Windows paths (`C:\Users\...`) gives an empty folder name on Linux and the load fails, so rebuild the lookup table on each machine (see `KYOTO_database_extractor_README.md`).
+- This function is called from the parse section of the runner, which is outside the per-material `try / except`. An error here stops the whole run.
 
 ### `reference_data_parser(materials, phonon_db_folder, reference_folder, mp_ids=None)`
 
@@ -177,10 +177,6 @@ reference_data_parser
 - `references`: `{material name: Phonopy object}`. A material with no reference data is **absent** from this dictionary (the runner checks `if material_name in references`).
 - `sources`: `{material name: text label}` for every material.
 
-**Good to know:**
-- A `<material>_phonopy_params.yaml` in `reference_data/` must contain force constants (or forces) so that `phonopy.load` can use it directly.
-- The two sources can use different DFT settings (phononDB is PBEsol). The `sources` dictionary is how you tell which one a result was compared with. At the moment `sources` is printed but **not written to `summary.csv`**.
-
 ---
 
 ## 4. MLIP calculator functions
@@ -196,23 +192,23 @@ Each function takes a `device` (`"cpu"` or `"cuda"`) and returns an ASE calculat
 **Relies on:**
 - The `mace-torch` package (clear `ImportError` if missing).
 - Internet access the **first** time it runs: `mace_mp` downloads the model weights and caches them. On an HPC compute node without internet, run it once on a login node first.
-
-**Good to know:** `float64` is used because phonons come from small differences in forces between displaced structures, and `float32` rounding noise can be comparable to those differences.
-
+- 
 ### `make_prophet(device)`
 
 **What it does:** returns the Prophet-OAME-MBD model as an ASE calculator (`KairosCalculator`).
 
 **Steps:**
-1. Checks that `weights/prophet-oame-mbd.pt` exists. If not, raises `FileNotFoundError` with the download URL. It does not download the file for you.
+1. Checks that `weights/prophet-oame-mbd.pt` exists. If not, raises `FileNotFoundError` with the download URL (`PROPHET_URL` in the function, a Hugging Face link pinned to one revision). It does not download the file for you.
 2. Imports `KairosCalculator` from the `prophet` package.
 3. Returns `KairosCalculator(model_path=..., use_kernel=False, device=device)`.
 
 **Relies on:**
 - The weights file placed by hand in `weights/` (CC BY 4.0 licence).
-- The `prophet` package (clear `ImportError` if missing).
+- The `prophet-mlip` package, imported as `prophet` (clear `ImportError` if missing).
 
-**Good to know:** `use_kernel=False` turns off Prophet's GPU kernel so the model also runs on CPU.
+**Good to know:**
+- `use_kernel=False` turns off Prophet's GPU kernel so the model also runs on CPU.
+- The folder and file names are fixed in the code: `weights/prophet-oame-mbd.pt` next to `MLIP_parser.py`.
 
 ### `MODELS` dictionary
 
@@ -245,4 +241,4 @@ Nothing in `MLIP_processor.py` needs to change.
 | `phonon_db_parser` | `reference_data_parser` | `phononDB/phonon_db/<mp-id folder>/phonon.yaml` + `FORCE_SETS`, phonopy | `Phonopy` object |
 | `reference_data_parser` | runner | the two functions above, `phonon_db_lookup_df.json`, `reference_data/*.yaml`, monty | `references`, `sources` |
 | `make_mace` | runner via `MODELS` | `mace-torch`, internet on first use | ASE calculator |
-| `make_prophet` | runner via `MODELS` | `prophet`, `weights/prophet-oame-mbd.pt` | ASE calculator |
+| `make_prophet` | runner via `MODELS` | `prophet-mlip`, `weights/prophet-oame-mbd.pt` | ASE calculator |
