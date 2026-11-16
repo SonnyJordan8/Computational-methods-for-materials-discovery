@@ -19,6 +19,8 @@ primitive Atoms ──► relax_structure ──► relaxed Atoms ──► get_
                                        results_table ──► results/summary.csv
 
 phonon_loader ──► plot_band_comparison ──► results/<material>/band_comparison_*.png
+
+start_timer ──► (one stage runs) ──► performance_log ──► results/performance_log.csv
 ```
 
 ---
@@ -30,13 +32,12 @@ phonon_loader ──► plot_band_comparison ──► results/<material>/band_c
 | Package | Used for |
 |---|---|
 | `numpy` | Finding the lowest and highest frequencies |
-| `csv` | Writing `summary.csv` |
+| `csv` | Writing `summary.csv` and `performance_log.csv` |
+| `os`, `time` | Timing each stage and counting the CPU cores available |
 | `matplotlib` | The band comparison figure |
 | `ase` (`Atoms`, `FrechetCellFilter`, `FIRE`, `write`) | Relaxation and turning phonopy supercells back into ASE structures |
 | `pymatgen` (`AseAtomsAdaptor`, `SpacegroupAnalyzer`, `HighSymmKpath`) | Space group, primitive cell and band path |
 | `phonopy` (`Phonopy`, `PhonopyAtoms`, `get_band_qpoints_and_path_connections`) | Displacements, force constants, band structure |
-
-**Imported but not used at the moment** (safe to delete): `ase.build.bulk`, `ase.io.read`, `ase.dft.kpoints.BandPath`, `pymatgen.io.vasp.inputs.Kpoints`, `read_crystal_structure`, `write_crystal_structure`.
 
 ### Settings at the top of the file
 
@@ -50,12 +51,14 @@ These are the same for every run. Settings that change between runs (model, supe
 | `MAX_STEPS` | `500` | Stops a relaxation that is stuck | Loew et al. 2025 / MatRIS paper |
 | `BAND_POINTS` | `51` | q-points per section of the band path | phonopy documentation |
 | `CSV_COLUMNS` | 22 names | Header row of `results/summary.csv` | |
+| `PERFORMANCE_COLUMNS` | 12 names | Header row of `results/performance_log.csv` | |
 
 ### Folder layout this file creates
 
 ```
 results/
 ├── summary.csv
+├── performance_log.csv
 └── <material>/
     ├── band_comparison_sc<supercell>_d<displacement>.png
     └── <model>/
@@ -88,8 +91,6 @@ results/
 
 **Used for:** the symmetry check after relaxation. If the MLIP has distorted the cell, the space group will have changed.
 
-**Good to know:** this is the same calculation `cif_parser` does in the parser file, so the "before" and "after" space groups are found the same way.
-
 ### `get_primitive_cell(material)`
 
 **What it does:** takes any ASE structure (usually the conventional cell from a CIF) and returns the **standard primitive cell** as a new ASE `Atoms` object. For example, 8-atom conventional Si becomes 2-atom primitive Si.
@@ -99,8 +100,6 @@ results/
 **Why it matters:**
 - Fewer atoms means fewer displaced supercells and a faster calculation.
 - The "standard" primitive cell follows the Setyawan-Curtarolo convention, which is the same convention `HighSymmKpath` uses in `get_band_path`. The band path coordinates are only correct for a cell in this setting.
-
-**Good to know:** the returned `Atoms` is a new object. The `info` dictionary from `cif_parser` (space group, formula) is **not** carried over, which is why the runner reads `space_group_symbol` from the original structure.
 
 ### `get_band_path(primitive_material)`
 
@@ -119,8 +118,6 @@ results/
 - `band_labels`: one flat list of labels in the same order.
 
 **Used by:** `band_calculator` and `plot_band_comparison`.
-
-**Good to know:** the q-points are in fractional (reduced) coordinates, so the same path can be reused for the reference data and for every model even though each one has a slightly different lattice constant.
 
 ---
 
@@ -144,13 +141,6 @@ results/
 **Returns:** `(converged, steps)`: `True`/`False`, and the number of optimiser steps taken.
 
 **Files written:** `relax.log`, `relaxed.traj`, `relaxed.cif`.
-
-**Good to know:**
-- **The `material` object is changed in place.** After the call, `atoms` in the runner *is* the relaxed structure, and it still has the calculator attached (the runner uses this to read the leftover forces).
-- With the cell filter, `fmax` applies to the atomic forces and to the stress (converted to force-like units), so both must be small for convergence.
-- If the relaxation does not converge, the workflow carries on and records `relax_converged = False` in the CSV. It does not stop.
-- The docstring says `relax.traj` but the file is actually saved as `relaxed.traj`.
-- `relax.log` is appended to if you re-run the same settings, while `relaxed.traj` is overwritten.
 
 ---
 
@@ -183,14 +173,6 @@ results/
 - `phonopy_disp.yaml`: structure and displacements only (written *before* the forces, so it survives a crash in the force loop).
 - `phonopy_params.yaml`: structure, displacements, forces and force constants. This is the file `phonon_loader` reads for the plots.
 
-**Good to know:**
-- The cost of this stage grows with the number of displaced supercells × atoms per supercell. Si with a 2×2×2 supercell needs only 2 displacements (1 displacement × plus/minus); low-symmetry structures need many more.
-- The number of atoms in each supercell is `atoms in primitive cell × supercell³`.
-- The supercell must be large enough that the force constants have decayed by the cell edge. Supercell size is one of the things the project is testing.
-- No Born charges are set here, so there is no non-analytical correction and no LO/TO splitting in the MLIP result.
-
----
-
 ## 5. Stage 3: band structure
 
 ### `band_calculator(phonon, band_path, band_labels)`
@@ -212,10 +194,6 @@ results/
 - `"frequencies"`: list of arrays, shape (q-points, bands), in THz.
 - `"connections"`: list of `True`/`False`, whether each segment joins the next.
 
-**Good to know:**
-- The band structure is also stored inside the `phonon` object, which is why `save_bands` can be called straight afterwards.
-- Imaginary modes appear as **negative** frequencies (phonopy's convention).
-
 ### `save_bands(phonon, folder)`
 
 **What it does:** writes the band structure to `band.yaml` in the run folder.
@@ -230,8 +208,6 @@ results/
 
 **Used for:** detecting imaginary modes. The runner compares the value with `IMAGINARY_LIMIT` (-0.05 THz), which is defined **in the runner**, not in this file.
 
-**Good to know:** it only checks q-points on the band path. An instability somewhere else in the Brillouin zone would be missed; a full q-point mesh would be needed to catch it.
-
 ### `gamma_optical_frequency(phonon)`
 
 **What it does:** calculates the frequencies at the Γ point (q = 0, 0, 0) and returns the **highest** one, in THz.
@@ -239,13 +215,6 @@ results/
 **Relies on:** a `Phonopy` object with force constants. It does not need `band_calculator` to have been run.
 
 **Used for:** the single-number comparison with the reference (`gamma_percent_diff` in the CSV). The runner calls it once on the MLIP result and once on the reference.
-
-**Good to know:**
-- For Si this is the triply degenerate optical mode (about 15.5 THz experimentally).
-- With no non-analytical correction, for polar materials (GaAs, MgO) this is the **TO** frequency, not the LO. The reference is loaded with `is_nac=False`, so both sides are consistent.
-- For a material with many atoms it is simply the top of the spectrum at Γ, which may be less meaningful than for Si.
-
----
 
 ## 6. Results table
 
@@ -269,14 +238,7 @@ results/
 | `volume_per_atom_A3` | Relaxed volume per atom |
 | `gamma_optical_thz`, `ref_gamma_optical_thz`, `gamma_percent_diff` | Γ-point comparison with the reference (blank if no reference) |
 | `lowest_freq_thz`, `imaginary_modes` | Dynamical stability check |
-| `load_s`, `relax_s`, `forces_s`, `bands_s` | Wall-clock time of each stage |
-
-**Good to know:**
-- Rows are **appended**, never replaced. Re-running the same settings adds a second row; use `date_time` to tell them apart.
-- A crashed run writes a short row with only the first 6 columns.
-- The header is only written when the file is new. If you add a column to `CSV_COLUMNS`, delete or rename the old `summary.csv`, otherwise new rows will not line up with the old header.
-
----
+| `load_s`, `relax_s`, `forces_s`, `bands_s` | Wall-clock time of each stage (the values returned by `performance_log`, section 9) |
 
 ## 7. Comparison plot
 
@@ -294,8 +256,6 @@ results/
 - The folder naming from `get_run_folder`.
 
 **Returns:** `{model name: Phonopy object}`. The model name is the folder name.
-
-**Good to know:** this is what allows the plot to show several models at once even though the runner only calculates one model per run. Run MACE, then run Prophet, and the second run's plot contains both.
 
 ### `plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement)`
 
@@ -318,14 +278,6 @@ results/
 
 **Returns:** the path of the saved figure, `results/<material>/band_comparison_sc<supercell>_d<displacement>.png`.
 
-**Good to know:**
-- **One shared x-axis.** Each model relaxes to a slightly different lattice constant, so the true path lengths differ slightly. The plot uses the first data set's distances for all of them so the high-symmetry points line up. The frequencies are not changed.
-- Negative frequencies on the plot are imaginary modes.
-- `supercell` and `displacement` are only used for the title and file name. They describe the MLIP runs; the reference data has its own supercell and displacement.
-- The reference line may be PBEsol (phononDB) or whatever is in `reference_data/`. The legend just says "Reference".
-
----
-
 ## 8. Summary table
 
 | Function | Called by | Relies on | Returns / writes |
@@ -343,21 +295,55 @@ results/
 | `results_table` | runner | `CSV_COLUMNS`, row in the right order | appends to `summary.csv` |
 | `phonon_loader` | runner | saved `phonopy_params.yaml` files | dict of `Phonopy` objects |
 | `plot_band_comparison` | runner | `phonon_loader`, `band_calculator`, reference from parser | PNG figure path |
+| `start_timer` | runner | `time` | `(wall time, CPU time)` at this moment |
+| `get_cores_available` | `performance_log` | `os` | number of cores |
+| `performance_log` | runner | `start_timer` value, `PERFORMANCE_COLUMNS` | wall time in seconds; appends to `performance_log.csv` |
 
----
+## 9. Performance log
 
-## 9. Planned addition: performance log
+These three functions are at the top of the file. The runner wraps each stage in a timer, so every stage of every run gets one row in `results/performance_log.csv`.
 
-**Not in the file yet.** Designed in the conversation of 15 Nov 2026; add this section's functions when they are pasted in.
+```python
+timer = start_timer()
+converged, steps = relax_structure(atoms, calc, folder)
+relax_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
+```
 
-| Function | What it does | Relies on |
-|---|---|---|
-| `start_timer()` | Returns the wall-clock time and CPU time at this moment | `time` |
-| `get_cores_available()` | Number of cores the process is allowed to use | `os.sched_getaffinity` on Linux, `os.cpu_count` on Windows/Mac |
-| `performance_log(material_name, model_name, device, supercell, displacement, stage, timer)` | Appends one row per stage to `results/performance_log.csv` and returns the wall time | `start_timer`, `get_cores_available`, `RESULTS_FOLDER`, `PERFORMANCE_COLUMNS` |
+### `start_timer()`
 
-Columns: `date_time, material, model, device, supercell, displacement_A, stage, wall_time_s, cpu_time_s, cores_used, cores_available, cpu_usage_percent`.
+**What it does:** returns the wall-clock time (`time.time()`) and the CPU time of this process (`time.process_time()`) at this moment, as a pair. Call it just before a stage starts and pass the result to `performance_log` when the stage has finished.
 
-- `cores_used` = CPU time ÷ wall time (average number of busy cores).
-- `cpu_usage_percent` = cores used ÷ cores available × 100.
-- On a GPU run the CPU columns will look low, because CPU time does not see GPU work.
+### `get_cores_available()`
+
+**What it does:** returns the number of CPU cores this process is allowed to use.
+
+- On Linux it uses `os.sched_getaffinity`, which gives the cores given to the job on a supercomputer, not the whole node.
+- On Windows and Mac it uses `os.cpu_count`, which is every core in the machine.
+
+### `performance_log(material_name, model_name, device, supercell, displacement, stage, timer)`
+
+**What it does:** works out how long the stage took, appends one row to `results/performance_log.csv`, and returns the wall time in seconds.
+
+**Steps:**
+1. Wall time = now minus the wall time in `timer`. CPU time = now minus the CPU time in `timer`.
+2. `cores_used` = CPU time ÷ wall time (the average number of busy cores).
+3. `cpu_usage_percent` = cores used ÷ cores available × 100.
+4. Creates `results/` if needed, writes the `PERFORMANCE_COLUMNS` header if the file is new, then appends the row.
+
+**Relies on:** a `timer` value from `start_timer`, `get_cores_available`, `RESULTS_FOLDER`, `PERFORMANCE_COLUMNS`.
+
+**Returns:** the wall time in seconds. The runner stores it as `load_time`, `relax_time`, `forces_time` or `bands_time`, and these go into `summary.csv` as `load_s`, `relax_s`, `forces_s` and `bands_s`.
+
+**The columns:**
+
+| Column | Meaning |
+|---|---|
+| `date_time` | When the row was written (the end of the stage) |
+| `material` | Material name, or `all` for the model load |
+| `model`, `device`, `supercell`, `displacement_A` | What was run |
+| `stage` | `model load`, `relaxation`, `force constants` or `band structure` |
+| `wall_time_s` | Time taken |
+| `cpu_time_s` | Compute time, summed over all cores |
+| `cores_used` | CPU time ÷ wall time |
+| `cores_available` | From `get_cores_available` |
+| `cpu_usage_percent` | Cores used ÷ cores available × 100 |
