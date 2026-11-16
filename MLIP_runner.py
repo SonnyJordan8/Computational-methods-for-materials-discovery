@@ -1,4 +1,3 @@
-import time
 from datetime import datetime
 import numpy as np
 
@@ -43,7 +42,6 @@ references, reference_sources = reference_data_parser(
 # Calculations
 if RUN_CALCULATIONS:
     # Load the model once and time it
-    start = time.time()
     timer = start_timer()
     calc = MODELS[MODEL](DEVICE)
     load_time = performance_log("all", MODEL, DEVICE, SUPERCELL, DISPLACEMENT, "model load", timer)
