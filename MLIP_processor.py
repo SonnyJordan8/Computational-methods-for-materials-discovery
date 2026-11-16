@@ -2,24 +2,21 @@ from pathlib import Path
 import numpy as np
 import csv
 import matplotlib.pyplot as plt
+import os
+import time
 
 from ase import Atoms
-from ase.build import bulk
 from ase.filters import FrechetCellFilter
 from ase.io import write
-from ase.io import read
 from ase.optimize import FIRE
-from ase.dft.kpoints import BandPath
 
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.symmetry.bandstructure import HighSymmKpath
-from pymatgen.io.vasp.inputs import Kpoints
 
 import phonopy
 from phonopy import Phonopy
 from phonopy.structure.atoms import PhonopyAtoms
-from phonopy.interface.calculator import (read_crystal_structure, write_crystal_structure)
 from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
 
 
@@ -42,6 +39,62 @@ CSV_COLUMNS = [
     "lowest_freq_thz", "imaginary_modes",
     "load_s", "relax_s", "forces_s", "bands_s",
 ]
+
+# Column names for performance_log.csv
+PERFORMANCE_COLUMNS = [
+    "date_time", "material", "model", "device", "supercell", "displacement_A", "stage",
+    "wall_time_s", "cpu_time_s", "cores_used", "cores_available", "cpu_usage_percent",
+]
+
+# Performance log
+
+def start_timer():
+    """
+    Starts timing a stage. Returns the wall clock time and the CPU time at this moment.
+    Pass the result to performance_log when the stage has finished.
+
+    """
+    return time.time(), time.process_time()
+
+def get_cores_available():
+    """
+    Returns the number of CPU cores this process is allowed to use.
+    On a supercomputer this is the number of cores given to the job, not the whole node.
+
+    """
+    if hasattr(os, "sched_getaffinity"):    # Linux only
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()                   # Mac and Windows
+
+def performance_log(material_name, model_name, device, supercell, displacement, stage, timer):
+    """
+    Adds one row to results/performance_log.csv for one stage of one run.
+    "timer" is the value returned by start_timer before the stage began.
+    Returns the wall time of the stage in seconds.
+
+    """
+    wall_start, cpu_start = timer
+    wall_time = time.time() - wall_start            # time taken
+    cpu_time = time.process_time() - cpu_start      # compute time, summed over all cores
+
+    cores_used = cpu_time / wall_time               # average number of busy cores
+    cores_available = get_cores_available()
+    cpu_usage = cores_used / cores_available * 100
+
+    RESULTS_FOLDER.mkdir(parents = True, exist_ok = True)
+    csv_file = RESULTS_FOLDER / "performance_log.csv"
+    is_new = not csv_file.exists()
+    with open(csv_file, "a", newline="") as file:
+        writer = csv.writer(file)
+        if is_new:
+            writer.writerow(PERFORMANCE_COLUMNS)
+        writer.writerow([
+            time.strftime("%Y-%m-%d %H:%M:%S"), material_name, model_name, device,
+            supercell, displacement, stage,
+            round(wall_time, 2), round(cpu_time, 2), round(cores_used, 2),
+            cores_available, round(cpu_usage, 1),
+        ])
+    return wall_time
 
 # Folder generation for one run
 
@@ -108,7 +161,7 @@ def get_band_path(primitive_material):
 def relax_structure(material, calc, folder):
     """
     Returns the relaxed structure of the material using the MLIP and FIRE + FrechetCellFilter
-    Saves the relax.log, relax.traj and the relaxed.cif in the folder
+    Saves the relax.log, relaxed.traj and the relaxed.cif in the folder
     the materials object is changed into the relaxed structure.
     """
     material.calc = calc
@@ -194,7 +247,7 @@ def band_calculator(phonon, band_path, band_labels):
 def save_bands(phonon, folder):
 
     """
-    Saves the band structure as band.taml in the folder.
+    Saves the band structure as band.yaml in the folder.
 
     """
     phonon.write_yaml_band_structure(filename=str(folder / "band.yaml"))
