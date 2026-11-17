@@ -216,7 +216,7 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
     phonon.forces = forces
     phonon.produce_force_constants()
 
-    phonon.save(str(folder / "phonopy_params.yaml"), settings={"force_constants": True})
+    phonon.save(str(folder / "phonopy_force_sets.yaml"), settings={"force_constants": True})
     return phonon
 
 # Stage 3: Band structure
