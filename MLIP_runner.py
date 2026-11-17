@@ -10,7 +10,7 @@ from MLIP_processor import results_table, phonon_loader, plot_band_comparison
 from MLIP_processor import start_timer, performance_log
 # Settings
 # Change these before each run.
-MODEL = "Prophet-OAME-MBD"   # one of the keys of MODELS
+MODEL = "MACE-MP-0-medium"   # one of the keys of MODELS
 DEVICE = "cpu"
 SUPERCELL = 2
 DISPLACEMENT = 0.03
@@ -154,7 +154,7 @@ if RUN_PLOTS:
             # Band path from the primitive cell of the CIF structure, shared by every data set
             band_path, band_labels = get_band_path(get_primitive_cell(materials[material_name]))
 
-            figure_file = plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell=SUPERCELL, displacement=DISPLACEMENT)
+            figure_file = plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell=SUPERCELL, displacement=DISPLACEMENT, reference_label=reference_sources[material_name])
             print(f"\n{material_name}: plotted {list(phonons.keys())}")
             print(f"  saved to {figure_file}")
 

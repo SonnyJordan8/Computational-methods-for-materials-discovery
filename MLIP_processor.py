@@ -305,13 +305,14 @@ def phonon_loader(material_name, supercell, displacement):
             phonons[model_folder.name] = phonopy.load(str(params_file))
     return phonons
 
-def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement):
+def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
  
     """
     Plots the band structure of every model in "phonons" on the same figure,
     along the band path from get_band_path.
     The reference data is added as a black line if reference_phonon is not None.
     Saves results/<material>/band_comparison_sc<supercell>_d<displacement>.png
+    Reference label is the entry for reference data source dictionary.
     Returns the path of the saved figure.
 
     """
@@ -332,7 +333,7 @@ def plot_band_comparison(material_name, phonons, reference_phonon, band_path, ba
             lines = ax.plot(x_axis[section], bands["frequencies"][section], color="black", linewidth=1.5)
             # Only label one line so the legend has one entry per data set
             if section == 0:
-                lines[0].set_label("Reference")
+                lines[0].set_label(reference_label)
 
     # Then one colour per model
     colour_number = 0
