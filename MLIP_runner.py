@@ -12,14 +12,17 @@ from MLIP_processor import start_timer, performance_log
 # Change these before each run.
 MODEL = "MACE-MP-0-medium"   # one of the keys of MODELS
 DEVICE = "cpu"
-SUPERCELL = 2
+SUPERCELL = 3
 DISPLACEMENT = 0.03
 RUN_CALCULATIONS = True      # relax and calculate phonons with MODEL
-RUN_PLOTS = True             # plot every model that has saved results
+
+RUN_PLOTS_MLIP_COMPARISON = True             # plot every model that has saved results
+RUN_PLOTS_SC_COMPARISON = True             # plot every SC size for given model that has saved results
+
 IMAGINARY_LIMIT = -0.05   # THz, a frequency below this counts as an imaginary mode - Batatia et al. 2025
 
 # Materials in materials_cif that are being calculated
-MATERIALS = ["Si", "GaAs", "MgO"]
+MATERIALS = ["Si"]
 # phononDB id for any material that can't be matched automatically by formula + space group,
 # e.g. {"Si": "mp-149"}. Materials not listed here are matched automatically
 REFERENCE_MP_IDS = {}
@@ -137,7 +140,7 @@ if RUN_CALCULATIONS:
 
 # Plots
 # One figure per material, with every model that has saved results and the reference data
-if RUN_PLOTS:
+if RUN_PLOTS_MLIP_COMPARISON:
     supercell = SUPERCELL
     displacement = DISPLACEMENT
     for material_name in materials:
