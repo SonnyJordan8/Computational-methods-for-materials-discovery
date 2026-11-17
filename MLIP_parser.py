@@ -161,9 +161,20 @@ def make_prophet(device):
       raise ImportError("Prophet is not installed. Please check you are working in the right conda environment.") 
   
 # use_kernel=False skips Prophet's GPU kernel, so it also runs on CPU - Prophet README
-  return KairosCalculator(model_path=str(PROPHET_WEIGHTS), use_kernel=False, device=device)
+  return KairosCalculator(model_path = str(PROPHET_WEIGHTS), use_kernel = False, device = device)
 
+def make_sevennet(device):
+   """
+   Creates a SevenNet-Omni-i12 calculator for a given device (CPU or GPU)
 
+   """ 
+   try:
+       from sevenn.calculator import SevenNetCalculator
+    
+   except ImportError:
+        raise ImportError("SevenNet is not installed. Please check you are working in the right conda environment.")
+    
+   return SevenNetCalculator(model = "7net-omni-i12", modal = "mpa", device = device)
 
 
 
@@ -171,4 +182,5 @@ def make_prophet(device):
 MODELS = {
     "MACE-MP-0-medium": make_mace,
     "Prophet-OAME-MBD": make_prophet,
+    "SevenNet-Omni-i12": make_sevennet,
 }
