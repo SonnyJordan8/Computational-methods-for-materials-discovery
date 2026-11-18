@@ -1,6 +1,6 @@
 # Local data folder
 /weights/
-/phononDB/
+phononDB/
 /results/
 /materials_cif/
 /materials_project_reference_data/
