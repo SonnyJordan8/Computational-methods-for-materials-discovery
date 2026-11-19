@@ -1,31 +1,34 @@
 from datetime import datetime
 import numpy as np
 
-from MLIP_parser import MATERIALS_CIF_FOLDER, REFERENCE_PHONOPY_PARAMS_FOLDER, PHONON_DB_FOLDER, MODELS
+from MLIP_parser import MATERIALS_CIF_FOLDER, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, MODELS
 from MLIP_parser import cif_parser, reference_data_parser
 from MLIP_processor import get_run_folder, get_space_group, get_primitive_cell, get_band_path
 from MLIP_processor import relax_structure, force_constant_calculator
 from MLIP_processor import band_calculator, save_bands, lowest_band_frequency, gamma_optical_frequency
 from MLIP_processor import results_table, phonon_loader, plot_band_comparison
 from MLIP_processor import start_timer, performance_log
+from MLIP_processor import results_table, phonon_loader
+from MLIP_processor import plot_run_bands, plot_band_comparison
+
 # Settings
 # Change these before each run.
 MODEL = "MACE-MP-0-medium"   # one of the keys of MODELS
 DEVICE = "cpu"
-SUPERCELL = 3
+SUPERCELL = 1
 DISPLACEMENT = 0.03
-RUN_CALCULATIONS = True      # relax and calculate phonons with MODEL
+RUN_CALCULATIONS = False      # relax and calculate phonons with MODEL
 
-RUN_PLOTS_MLIP_COMPARISON = True             # plot every model that has saved results
-RUN_PLOTS_SC_COMPARISON = True             # plot every SC size for given model that has saved results
+RUN_PLOTS_RUNS = True                    # one plot per saved run at SUPERCELL and DISPLACEMENT, every model
+RUN_PLOTS_MLIP_COMPARISON = True        # every model with saved results at SUPERCELL and DISPLACEMENT on one plot
 
 IMAGINARY_LIMIT = -0.05   # THz, a frequency below this counts as an imaginary mode - Batatia et al. 2025
 
 # Materials in materials_cif that are being calculated
-MATERIALS = ["Si"]
+MATERIALS = ["K3MnCrO8"]
 # phononDB id for any material that can't be matched automatically by formula + space group,
 # e.g. {"Si": "mp-149"}. Materials not listed here are matched automatically
-REFERENCE_MP_IDS = {}
+REFERENCES = {}
 
 # Parse
 # Materials come from the CIF files, reference data from the phononDB folder or Phonopy_params.yaml files
@@ -37,9 +40,9 @@ if MATERIALS is not None:
     materials = {name: materials[name] for name in MATERIALS}
 print(f"materials: {list(materials.keys())}")
 
-# Reference data comes from phononDB first, then the reference_data folder
+# Reference data comes form three sources currently
 references, reference_sources = reference_data_parser(
-    materials, PHONON_DB_FOLDER, REFERENCE_PHONOPY_PARAMS_FOLDER, mp_ids=REFERENCE_MP_IDS
+    materials, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, requested=REFERENCES
 )
 
 # Calculations
@@ -139,27 +142,37 @@ if RUN_CALCULATIONS:
             ])
 
 # Plots
-# One figure per material, with every model that has saved results and the reference data
-if RUN_PLOTS_MLIP_COMPARISON:
-    supercell = SUPERCELL
-    displacement = DISPLACEMENT
+# All plots use SUPERCELL and DISPLACEMENT from the settings, and the saved results of every
+# earlier run, so they can be remade with RUN_CALCULATIONS = False.
+if RUN_PLOTS_RUNS or RUN_PLOTS_MLIP_COMPARISON:
     for material_name in materials:
+        print(f"\n===== plots: {material_name} =====")
         try:
-            phonons = phonon_loader(material_name, supercell, displacement)
-            if len(phonons) == 0:
-                print(f"\n{material_name}: no saved results to plot")
-                continue
-
-            reference_phonon = None
-            if material_name in references:
-                reference_phonon = references[material_name]
+            reference_phonon = references.get(material_name)
+            reference_label = reference_sources[material_name]
 
             # Band path from the primitive cell of the CIF structure, shared by every data set
             band_path, band_labels = get_band_path(get_primitive_cell(materials[material_name]))
 
-            figure_file = plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell=SUPERCELL, displacement=DISPLACEMENT, reference_label=reference_sources[material_name])
-            print(f"\n{material_name}: plotted {list(phonons.keys())}")
-            print(f"  saved to {figure_file}")
+            # Every model with saved results at this supercell and displacement
+            phonons = phonon_loader(material_name, SUPERCELL, DISPLACEMENT)
+            if len(phonons) == 0:
+                print(f"no saved results at sc{SUPERCELL}_d{DISPLACEMENT}")
 
+            # 1. One plot per run
+            if RUN_PLOTS_RUNS:
+                for model_name, phonon in phonons.items():
+                    figure_file = plot_run_bands(material_name, model_name, phonon, reference_phonon,
+                                                 band_path, band_labels, SUPERCELL, DISPLACEMENT, reference_label)
+                    print(f"run plot ({model_name}): {figure_file}")
+
+            # 2. All models on one plot
+            if RUN_PLOTS_MLIP_COMPARISON and len(phonons) > 0:
+                figure_file = plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels,
+                                                   SUPERCELL, DISPLACEMENT, reference_label)
+                print(f"model comparison {list(phonons.keys())}: {figure_file}")
+
+            
         except Exception as error:
-            print(f"\n{material_name}: plot CRASHED: {type(error).__name__}: {error}")
+            print(f"{material_name}: plot CRASHED: {type(error).__name__}: {error}")
+
