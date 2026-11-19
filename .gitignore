@@ -3,7 +3,7 @@
 phononDB/
 /results/
 /materials_cif/
-/materials_project_reference_data/
+/reference_data/
 
 # Python clutter
 __pycache__/
