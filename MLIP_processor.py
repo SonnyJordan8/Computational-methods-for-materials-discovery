@@ -16,6 +16,7 @@ from pymatgen.symmetry.bandstructure import HighSymmKpath
 
 import phonopy
 from phonopy import Phonopy
+from phonopy.file_IO import write_FORCE_SETS
 from phonopy.structure.atoms import PhonopyAtoms
 from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
 
@@ -23,11 +24,19 @@ from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
 # Results are saved in a "results" folder next to this file
 RESULTS_FOLDER = Path(__file__).resolve().parent / "results"
 
-# Settings that are the same for every run
+# Settings that are the same for every run - May need to be edited depending on how tight convergence is needed
+
 IS_PLUSMINUS = True       # displace in both + and - directions - Orb-v3 paper Appendix G
 FMAX = 0.005              # relaxation stops when all forces are below this, eV/Angstrom - Loew et al. 2025
 MAX_STEPS = 500           # stops a stuck relaxation - Loew et al. 2025 / MatRIS paper
 BAND_POINTS = 51          # q-points per section of the band path - phonopy docs, "Band structure" section example
+
+# Files saved in each run folder (the same layout as phononDB): the structure and displacements
+# in a small yaml file, and the forces in a separate FORCE_SETS file. The force constants are
+# not saved - they are recomputed from FORCE_SETS when a run is loaded, because a saved force
+# constant matrix gets very large for big supercells.
+DISPLACEMENTS_FILE = "phonopy_disp.yaml"
+FORCE_SETS_FILE = "FORCE_SETS"
 
 # Column names of results/summary.csv
 CSV_COLUMNS = [
@@ -178,9 +187,8 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
     """
     Function thst calculates the displacements of the cell in phonopy,
     the forces on the atoms in ASE and the force constants in phonopy.
-    Saves phonopy_disp.yaml (displacements only) and phonopy_params.yaml
-    (structure, displacements, forces and force constants) in the folder.
-    Returns the Phonopy object.
+    Saves phonopy_disp.yaml (structure and displacements) and FORCE_SETS
+    (displacements and forces) in the folder. 
 
 
     """
@@ -199,7 +207,7 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
     phonon.generate_displacements(distance = displacement, is_plusminus = IS_PLUSMINUS)
     supercells = phonon.supercells_with_displacements
     print(f"Displaced supercells: {len(supercells)}")
-    phonon.save(str(folder / "phonopy_disp.yaml"))
+    phonon.save(str(folder / DISPLACEMENTS_FILE), settings = {"force_sets": False})
     
     forces = []
     for supercell_atoms in supercells:
@@ -216,8 +224,19 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
     phonon.forces = forces
     phonon.produce_force_constants()
 
-    phonon.save(str(folder / "phonopy_force_sets.yaml"), settings={"force_constants": True})
+    write_FORCE_SETS(phonon.dataset, filename=str(folder / FORCE_SETS_FILE))
     return phonon
+
+def load_run_phonon(run_folder):
+    """
+    Loads the saved phonons of one run folder (phonopy_disp.yaml and FORCE_SETS).
+    Returns None if the run folder has no saved phonons.
+    """
+    displacements_file = run_folder / DISPLACEMENTS_FILE
+    force_sets_file = run_folder / FORCE_SETS_FILE
+    if not (displacements_file.exists() and force_sets_file.exists()):
+        return None
+    return phonopy.load(str(displacements_file), force_sets_filename=str(force_sets_file))
 
 # Stage 3: Band structure
 
@@ -287,34 +306,33 @@ def results_table(row):
 
 
 # Load phonon band structures for comparison plot
-
 def phonon_loader(material_name, supercell, displacement):
     """
-    Loads the saved phonons_params.yaml of every model that has been run for this material.
+    Loads the saved phonons of every model that has been run for this material
+    with this supercell and displacement.
     Returns a dictionary with the model name -> Phonopy object
-
-    """    
+    """
     phonons = {}
     material_folder = RESULTS_FOLDER / material_name
     if not material_folder.exists():
         return phonons
 
     for model_folder in sorted(material_folder.iterdir()):
-        params_file = model_folder / f"sc{supercell}_d{displacement}" / "phonopy_params.yaml"
-        if params_file.exists():
-            phonons[model_folder.name] = phonopy.load(str(params_file))
+        if not model_folder.is_dir(): 
+            continue
+        phonon = load_run_phonon(model_folder / f"sc{supercell}_d{displacement}")
+        if phonon is not None:
+            phonons[model_folder.name] = phonon
     return phonons
 
-def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
- 
-    """
-    Plots the band structure of every model in "phonons" on the same figure,
-    along the band path from get_band_path.
-    The reference data is added as a black line if reference_phonon is not None.
-    Saves results/<material>/band_comparison_sc<supercell>_d<displacement>.png
-    Reference label is the entry for reference data source dictionary.
-    Returns the path of the saved figure.
 
+# Plots
+def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure_file, reference_label="REF"):
+    """
+    Plots the band structure of every Phonopy object in "datasets" (label -> Phonopy)
+    on the same figure, along the band path from get_band_path.
+    The reference data is added as a black line if reference_phonon is not None.
+    Saves the figure to figure_file and returns its path.
     """
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -335,10 +353,10 @@ def plot_band_comparison(material_name, phonons, reference_phonon, band_path, ba
             if section == 0:
                 lines[0].set_label(reference_label)
 
-    # Then one colour per model
+    # Then one colour per data set
     colour_number = 0
-    for model_name in phonons:
-        bands = band_calculator(phonons[model_name], band_path, band_labels)
+    for label in datasets:
+        bands = band_calculator(datasets[label], band_path, band_labels)
         if x_axis is None:
             x_axis = bands["distances"]
             connections = bands["connections"]
@@ -346,7 +364,7 @@ def plot_band_comparison(material_name, phonons, reference_phonon, band_path, ba
         for section in range(len(x_axis)):
             lines = ax.plot(x_axis[section], bands["frequencies"][section], color=colour, linewidth=1.0)
             if section == 0:
-                lines[0].set_label(model_name)
+                lines[0].set_label(label)
         colour_number = colour_number + 1
 
     # Tick marks at the start and end of each section of the band path
@@ -371,12 +389,36 @@ def plot_band_comparison(material_name, phonons, reference_phonon, band_path, ba
     ax.axhline(0, color="grey", linewidth=0.5)
     ax.set_xlim(tick_positions[0], tick_positions[-1])
     ax.set_ylabel("Frequency (THz)")
-    ax.set_title(f"{material_name}: sc{supercell}, displacement {displacement} A")
+    ax.set_title(title)
     ax.legend()
 
-    figure_file = RESULTS_FOLDER / material_name / f"band_comparison_sc{supercell}_d{displacement}.png"
+    figure_file = Path(figure_file)
+    figure_file.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(figure_file), dpi=200)
     plt.close(fig)
     return figure_file
 
+def plot_run_bands(material_name, model_name, phonon, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
+    """
+    One run (one model, supercell and displacement) with the reference underneath.
+    Saves results/<material>/<model>/sc<supercell>_d<displacement>/band_structure.png
+    """
+    return plot_bands(
+        {model_name: phonon}, reference_phonon, band_path, band_labels,
+        title=f"{material_name}: {model_name}, sc{supercell}, displacement {displacement} A",
+        figure_file=get_run_folder(material_name, model_name, supercell, displacement) / "band_structure.png",
+        reference_label=reference_label,
+    )
+
+def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
+    """
+    Every model in "phonons" (model name -> Phonopy) on the same figure.
+    Saves results/<material>/band_comparison_sc<supercell>_d<displacement>.png
+    """
+    return plot_bands(
+        phonons, reference_phonon, band_path, band_labels,
+        title=f"{material_name}: sc{supercell}, displacement {displacement} A",
+        figure_file=RESULTS_FOLDER / material_name / f"band_comparison_sc{supercell}_d{displacement}.png",
+        reference_label=reference_label,
+    )
 
