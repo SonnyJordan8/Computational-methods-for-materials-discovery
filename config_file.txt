@@ -1,0 +1,152 @@
+# --------------------------------------------------------
+# RUN SETTINGS
+# These settings are checked and edited before every run
+
+MATERIALS = K3MnCrO8
+MODEL = MACE-MP-0-medium
+REFERENCES = K3MnCrO8 mp-757140
+DEVICE = cpu
+DTYPE = float64
+RUN_CALCULATIONS = True
+RUN_PLOTS_RUNS = False
+RUN_PLOTS_MLIP_COMPARISON = False
+IMAGINARY_LIMIT = -0.05 # THz
+
+# --------------------------------------------------------
+# ASE relaxation calculation settings
+
+# OPTIMIZER - the ASE optimiser 
+OPTIMIZER = FIRE
+
+# RELAX_CELL - allows the cell shape to be relaxed as well
+# as the atoms within the cell if flagged True
+# RERLAX_CELL = True
+
+# FMAX - threshold for relaxation calculation to stop
+# in eV/Angstrom
+FMAX = 0.005
+
+# ENERGY_TOL - the threshold for chang in energy for energy
+# convergence during optimisation (not included in ASE custom
+functionality)
+ENERGY_TOL = 0.00001 #eV
+
+# MAX_STEPS - the maximum number of steps in a relaxation
+# allowed before the calculation is stopped
+MAX_STEPS = 500
+
+# RELAX_SYMMETRY - keep the starting space group during relaxation
+RELAX_SYMMETRY = True
+
+# --------------------------------------------------------
+# PHONOPY SETTINGS - PREPROCESS
+
+# SUPERCELL - three numbers separated by a space is the
+# trace of the matrix, or 9 numbers to specify the whole matrix
+DIM = 2 2 2 
+
+# PRIMITIVE_AXES - the transformation matrix that converts the input cell
+# into the primitive cell. The runner already reduces each CIF to its primitive
+PRIMITIVE_AXES = AUTO
+
+# DISPLACEMENT setting defines how many angstroms each displacement
+# is for the phonopy calculation
+DISPLACEMENT = 0.03
+
+# IS_PLUSMINUS - displaces atom positions in both the + and - direction
+IS_PLUSMINUS = True
+
+# MAGMOM - magnetic moment symmetry of the input(not primitive or 
+# supercell) cell is defined here.
+# Collinear systems - provide one scalar valye per atom in input file
+# Non-collinear - provide three vector components per atom (3XNatoms total)
+# Empty for non-magnetic systems
+MAGMOM = 
+
+# PHONOPY_LOG_LEVEL - The detail in which phonopy generates its log
+# 0 quiet, 1 normal, 2 verbose
+PHONOPY_LOG_LEVEL = 1
+
+# -------------------------------------------------------------
+# SYMMETRY AND FORCE CONSTANTS
+
+# SYMMETRY - True: phonopy uses crystal symmetry to reduce the displacements
+# False: every atom is displaced in every direction
+SYMMETRY = True
+
+# SYMMETRY_TOLERANCE - how far (Angstrom) atoms can be from perfect
+# symmetry and still count as symmetric. Phonopy default 1e-5
+SYMMETRY_TOLERANCE = 1e-5
+
+# FC_CALCULATOR - how force constants are fitted: traditional, symfc or alm
+FC_CALCULATOR = traditional
+
+# FC_SYMMETRY - True: symmetrise the force constants after fitting
+FC_SYMMETRY = True
+# ---------------------------------------------------------
+# PHONOPY - POSTPROCESS
+
+# SUPERCELL - three numbers separated by a space is the
+# trace of the matrix, or 9 numbers to specify the whole matrix
+# This will fold band plots 
+DIM = 2 2 2 
+
+# BAND_POINTS - number of q-points per section of band path
+BAND_POINTS = 51
+
+# MESH - q-point mesh grid of uniform phoon wave vectors to calculate
+# thermal properties and DOS
+MESH = 20 20 20 
+
+# TPROP - flag to calculate thermal properties: free energy, entropy,
+# heat capacity
+TPROP = .TRUE 
+
+# TMIN, TMAX, TSTEP - the minimum temperature, maximum temperature and
+# number of steps within the range fore sampling thermal properties (k)
+TMIN = 0
+TMAX = 1000
+TSTEP = 10
+
+# IRREPS - q-point for which the irreducible representations will be worked 
+# out (0 0 0 for Gamma)
+IRREPS = 
+
+# SHOW_IRREPS - print the irreducible representations 
+SHOW_IRREPS = False
+
+# RESULTS_FOLDER - the folder where the calculation results
+# are saved
+RESULTS_FOLDER = results
+
+# DISPLACEMENTS_FILE - the file name of the file containing the 
+# displacement results
+DISPLACEMENTS_FILE = phonopy_disp.yaml
+
+# WRITE_FORCE_CONSTANTS - save the force constants 
+WRITE_FORCE_CONSTANTS = True
+
+# FORCE_SETS_FILE - the file name of the file containing the 
+# results of the write_FORCE_SETS function from phonopy.file_IO
+FORCE_SETS_FILE = FORCE_SETS
+
+# HDF5 - tells Phonopy to write / read numerical phonon data
+# as binary HDf5 files rather than plain text files
+HDF5 = .True
+
+
+
+# -------------------------------------------------------------
+# Input data folders
+
+# MATERIALS_CIF_FOLDER - the folder containing the starting cif
+# file for the calculation
+MATERIALS_CIF_FOLDER = materials_cif
+
+# PHONON_DB_FOLDER - folder containing reference data from the Kyoto
+# University phonon database
+PHONON_DB_FOLDER = reference_data/phononDB
+
+# MP_REFERENCE_FOLDER - folder contianing reference data from Materials Project
+MP_REFERENCE_FOLDER = reference_data/materials_project_reference_data
+
