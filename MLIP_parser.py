@@ -10,15 +10,16 @@ from phonopy import Phonopy
 from phonopy.structure.atoms import PhonopyAtoms
 from phonopy.file_IO import parse_FORCE_CONSTANTS
 from monty.serialization import loadfn
+# Settings and materials are edited in the config file 
+from MLIP_config import CONFIG
 
+# Folders - all set in config_file.txt, read by MLIP_config.py
 # All starting material CIF files live here
-MATERIALS_CIF_FOLDER = Path(__file__).resolve().parent / "materials_cif"
-# All reference data is stored here - different sources have different folders within this folder
-REFERENCE_DATA_FOLDER = Path(__file__).resolve().parent / "reference_data"
+MATERIALS_CIF_FOLDER = CONFIG["MATERIALS_CIF_FOLDER"]
 # Kyoto (Togo) phonon database, set up with Kyoto_database_extractor.ipynb
-PHONON_DB_FOLDER = REFERENCE_DATA_FOLDER / "phononDB"
+PHONON_DB_FOLDER = CONFIG["PHONON_DB_FOLDER"]
 # Materials Project phonons, set up with MaterialsProject_extractor.ipynb
-MP_REFERENCE_FOLDER = REFERENCE_DATA_FOLDER / "materials_project_reference_data"
+MP_REFERENCE_FOLDER = CONFIG["MP_REFERENCE_FOLDER"]
 
 def cif_parser(folder_path):
     """
@@ -79,7 +80,7 @@ def mp_lookup(mp_folder):
         print(f"Materials Project lookup file not found at {lookup_file}")
         return {}
     try:
-        lookup = loadfn(lookup_file)     # reads plain JSON too, and a monty-saved DataFrame if it is one
+        lookup = loadfn(lookup_file)    
         return lookup
     except Exception as error:
         print(f"could not read {lookup_file.name} ({type(error).__name__}: {error}) - MP references skipped")
@@ -167,7 +168,7 @@ def mp_parser(mp_folder, mp_name):
     come from the relevant folders.
 
     """
-    settings_file = mp_folder / "structure" / f"{mp_name}.json"
+    settings_file = mp_folder / "phonopy_settings" / f"{mp_name}_phonopy_settings.json"
     force_constants_file = mp_folder / "force_constants" / f"{mp_name}_force_constants"
     dos_file = mp_folder / "dos" / f"{mp_name}_phonondos"
     band_structure_file = mp_folder / "band_structure" / f"{mp_name}_phonondata"
@@ -185,8 +186,8 @@ def mp_parser(mp_folder, mp_name):
         cell=structure.lattice.matrix,
         scaled_positions=structure.frac_coords,
     )
-
-    # This will be changed when config file is added
+    # The reference's own supercell and primitive matrix, not DIM / PRIMITIVE_AXES from the config:
+    # its force constants were calculated in its own supercell
     primitive_matrix = settings.get("primitive_matrix") or "auto"
     phonon = Phonopy(unit_cell, supercell_matrix=settings["supercell_matrix"], primitive_matrix=primitive_matrix)
 
@@ -225,7 +226,6 @@ def find_reference(material_name, request, phonon_db_ids, mp_ids):
         print(f"{material_name}: {mp_id} is in both {found_in}, using {found_in[0]}. ")
     return found_in[0], mp_id
 
-# Need to double check this is necessary
 
 def check_reference_cell(material_name, structure, phonon):
     """
