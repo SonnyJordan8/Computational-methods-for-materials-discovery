@@ -1,0 +1,5 @@
+# Silicon: two models, and SevenNet at two supercells
+MATERIAL  = Si
+REFERENCE = NONE
+RUN = SevenNet-Omni-i12/sc2x2x2_d0.03_sym-on_relaxsym-off_fcsym-off
+RUN = MACE-MP-0-medium/sc2x2x2_d0.03_sym-on_relaxsym-off_fcsym-off
