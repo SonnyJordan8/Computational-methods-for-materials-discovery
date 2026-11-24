@@ -2,7 +2,7 @@
 
 **Role in the workflow:** does the calculations and writes the outputs. Every function here works on objects that are handed to it (an ASE `Atoms`, a calculator, a `Phonopy` object). It never chooses a model or a material itself; the runner does that.
 
-It is imported by `MLIP_runner.py`. It does not import `MLIP_parser.py`, so it does not know which MLIP it is using. Any ASE calculator works.
+It is imported by `MLIP_runner.py` and `MLIP_plotter.py`. It imports `MLIP_config.py` (for its settings) but not `MLIP_parser.py`, so it does not know which MLIP it is using. Any ASE calculator works.
 
 ```
 Atoms (from CIF)
@@ -15,10 +15,12 @@ primitive Atoms ──► relax_structure ──► relaxed Atoms ──► get_
                                              │
               get_band_path ──► band_calculator ──► bands dict ──► lowest_band_frequency
                                              │                     gamma_optical_frequency
-                                             ▼                     save_bands
-                                       results_table ──► results/summary.csv
+                                             │                     save_bands
+                                             ├──► phonon_properties (thermal properties, irreps)
+                                             ├──► results_table ──► results/summary.csv
+                                             └──► plot_run_bands ──► plot_bands ──► band_structure.png
 
-phonon_loader ──► plot_band_comparison ──► results/<material>/band_comparison_*.png
+load_run_phonon (saved run + its run_config.txt) ──► Phonopy object        (used by MLIP_plotter.py)
 
 start_timer ──► (one stage runs) ──► performance_log ──► results/performance_log.csv
 ```
@@ -31,27 +33,32 @@ start_timer ──► (one stage runs) ──► performance_log ──► resul
 
 | Package | Used for |
 |---|---|
-| `numpy` | Finding the lowest and highest frequencies |
+| `numpy` | Forces, lowest and highest frequencies |
 | `csv` | Writing `summary.csv` and `performance_log.csv` |
-| `os`, `time` | Timing each stage and counting the CPU cores available |
-| `matplotlib` | The band comparison figure |
-| `ase` (`Atoms`, `FrechetCellFilter`, `FIRE`, `write`) | Relaxation and turning phonopy supercells back into ASE structures |
+| `os`, `time` | Timing each stage, counting cores, writing `irreps.yaml` in the run folder |
+| `matplotlib` | Band structure figures |
+| `ase` (`Atoms`, `FrechetCellFilter`, `write`, `FIRE`, `BFGS`, `LBFGS`, `BFGSLineSearch`, `FixSymmetry`) | Relaxation and turning phonopy supercells back into ASE structures |
 | `pymatgen` (`AseAtomsAdaptor`, `SpacegroupAnalyzer`, `HighSymmKpath`) | Space group, primitive cell and band path |
-| `phonopy` (`Phonopy`, `PhonopyAtoms`, `get_band_qpoints_and_path_connections`) | Displacements, force constants, band structure |
+| `phonopy` (`load`, `Phonopy`, `PhonopyAtoms`, `write_FORCE_SETS`, `write_FORCE_CONSTANTS`, `write_force_constants_to_hdf5`, `get_band_qpoints_and_path_connections`) | Displacements, force constants, band structure, saving and reloading runs |
+| `MLIP_config` (`CONFIG`, `read_config`) | All settings; reading a run's saved `run_config.txt` |
 
 ### Settings at the top of the file
 
-These are the same for every run. Settings that change between runs (model, supercell, displacement) live in the runner.
+All are read from `config_file.txt` through `CONFIG`; nothing is hard-coded except `RUN_CONFIG_FILE`. See the top-level `README.md` for what each config setting means.
 
-| Constant | Value | Meaning | Source noted in code |
-|---|---|---|---|
-| `RESULTS_FOLDER` | `results/` next to this file | Where everything is saved | |
-| `IS_PLUSMINUS` | `True` | Displace each atom in both + and - directions | Orb-v3 paper, Appendix G |
-| `FMAX` | `0.005` eV/Å | Relaxation stops when the largest force is below this | Loew et al. 2025 |
-| `MAX_STEPS` | `500` | Stops a relaxation that is stuck | Loew et al. 2025 / MatRIS paper |
-| `BAND_POINTS` | `51` | q-points per section of the band path | phonopy documentation |
-| `CSV_COLUMNS` | 22 names | Header row of `results/summary.csv` | |
-| `PERFORMANCE_COLUMNS` | 12 names | Header row of `results/performance_log.csv` | |
+| Constant | Config setting | Used by |
+|---|---|---|
+| `RESULTS_FOLDER` | `RESULTS_FOLDER` | every output |
+| `OPTIMIZER`, `RELAX_CELL`, `FMAX`, `ENERGY_TOLERANCE`, `MAX_STEPS`, `RELAX_SYMMETRY` | `OPTIMIZER`, `RELAX_CELL`, `RELAX_FMAX`, `ENERGY_TOLERANCE`, `MAX_STEPS`, `RELAX_SYMMETRY` | `relax_structure`; `RELAX_SYMMETRY` also `get_run_folder` |
+| `OPTIMIZERS` | (none) | maps the `OPTIMIZER` name to the ASE class |
+| `PRIMITIVE_AXES`, `IS_PLUSMINUS`, `SYMMETRY`, `SYMMETRY_TOLERANCE`, `FC_CALCULATOR`, `FC_SYMMETRY`, `PHONOPY_LOG_LEVEL` | `PRIMITIVE_AXES`, `PM`, `SYMMETRY`, `SYMMETRY_TOLERANCE`, `FC_CALCULATOR`, `FC_SYMMETRY`, `PHONOPY_LOG_LEVEL` | `force_constant_calculator`; `SYMMETRY`, `FC_SYMMETRY` also `get_run_folder` |
+| `BAND_POINTS` | `BAND_POINTS` | `band_calculator` |
+| `MESH`, `TPROP`, `TMIN`, `TMAX`, `TSTEP`, `IRREPS`, `SHOW_IRREPS` | same names | `phonon_properties` |
+| `HDF5`, `WRITE_FORCE_CONSTANTS` | same names | `force_constant_calculator`, `save_bands` |
+| `DISPLACEMENTS_FILE`, `FORCE_SETS_FILE` | same names (`phonopy_disp.yaml`, `FORCE_SETS`) | saving and reloading runs |
+| `RUN_CONFIG_FILE` | (fixed: `run_config.txt`) | the copy of the config saved in each run folder (written by the runner, read by `load_run_phonon`) |
+| `CSV_COLUMNS` | (none) | header row of `results/summary.csv` (22 names) |
+| `PERFORMANCE_COLUMNS` | (none) | header row of `results/performance_log.csv` (12 names) |
 
 ### Folder layout this file creates
 
@@ -60,15 +67,17 @@ results/
 ├── summary.csv
 ├── performance_log.csv
 └── <material>/
-    ├── band_comparison_sc<supercell>_d<displacement>.png
+    ├── comparison_<plot file name>.png             written by MLIP_plotter.py
     └── <model>/
-        └── sc<supercell>_d<displacement>/
-            ├── relax.log
-            ├── relaxed.traj
-            ├── relaxed.cif
-            ├── phonopy_disp.yaml
-            ├── phonopy_params.yaml
-            └── band.yaml
+        └── sc<supercell>_d<displacement>_sym-on[...]/   see get_run_folder
+            ├── run_config.txt                       copy of the config (written by the runner)
+            ├── relax.log, relaxed.traj, relaxed.cif stage 1
+            ├── phonopy_disp.yaml, FORCE_SETS        stage 2
+            ├── force_constants.hdf5                 stage 2, if WRITE_FORCE_CONSTANTS (FORCE_CONSTANTS if HDF5 is off)
+            ├── band.hdf5                            stage 3 (band.yaml if HDF5 is off)
+            ├── thermal_properties.yaml              stage 4, if TPROP
+            ├── irreps.yaml                          stage 4, if IRREPS is set
+            └── band_structure.png                   the runner's plot of this run
 ```
 
 ---
@@ -77,47 +86,39 @@ results/
 
 ### `get_run_folder(material_name, model_name, supercell, displacement)`
 
-**What it does:** builds the path for one run, e.g. `results/Si/MACE-MP-0-medium/sc2_d0.03`. It only returns the path. It does not create the folder; the runner does that with `folder.mkdir(...)`.
+**What it does:** builds the path for one run. It is the **only** place a run folder's name is built; every other function that needs a run's folder or name calls it. It does not create the folder.
 
-**Relies on:** `RESULTS_FOLDER`.
+**The name:** `sc<supercell>_d<displacement>_sym-on` or `_sym-off` (`SYMMETRY`), then `_relaxsym-off` if `RELAX_SYMMETRY` is off and `_fcsym-off` if `FC_SYMMETRY` is off. For example:
 
-**Good to know:** `phonon_loader` rebuilds the same `sc<supercell>_d<displacement>` name to find saved results, so the two must stay in step if you ever change the naming.
+| Settings | Folder |
+|---|---|
+| all symmetry on | `results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-on` |
+| `SYMMETRY` off | `.../sc2x2x2_d0.03_sym-off` |
+| `RELAX_SYMMETRY` and `FC_SYMMETRY` off | `.../sc2x2x2_d0.03_sym-on_relaxsym-off_fcsym-off` |
+
+`supercell` is the label from `supercell_label` in `MLIP_config.py` (`2x2x2`, or `m` + nine numbers for a non-diagonal matrix).
+
+**Good to know:** runs with different symmetry settings get different folders and never overwrite each other. Runs that differ in another calculation setting (e.g. `PM`, `FC_CALCULATOR`) share a folder name; the runner's overwrite check stops the second one instead of overwriting.
 
 ### `get_space_group(material)`
 
-**What it does:** returns `(symbol, number)` of the space group of an ASE structure, e.g. `("Fd-3m", 227)`.
-
-**Relies on:** pymatgen `SpacegroupAnalyzer` with its default tolerance (`symprec = 0.01`).
-
-**Used for:** the symmetry check after relaxation. If the MLIP has distorted the cell, the space group will have changed.
+Returns `(symbol, number)` of the space group of an ASE structure, e.g. `("Fd-3m", 227)`, using pymatgen's `SpacegroupAnalyzer` with its default tolerance (`symprec = 0.01`). Used for the symmetry check after relaxation.
 
 ### `get_primitive_cell(material)`
 
-**What it does:** takes any ASE structure (usually the conventional cell from a CIF) and returns the **standard primitive cell** as a new ASE `Atoms` object. For example, 8-atom conventional Si becomes 2-atom primitive Si.
+Takes any ASE structure (usually the conventional cell from a CIF) and returns the **standard primitive cell** as a new ASE `Atoms` object (e.g. 8-atom conventional Si becomes 2-atom primitive Si), using pymatgen's `get_primitive_standard_structure()`.
 
-**Relies on:** pymatgen `get_primitive_standard_structure()`.
-
-**Why it matters:**
-- Fewer atoms means fewer displaced supercells and a faster calculation.
-- The "standard" primitive cell follows the Setyawan-Curtarolo convention, which is the same convention `HighSymmKpath` uses in `get_band_path`. The band path coordinates are only correct for a cell in this setting.
+**Why it matters:** fewer atoms means fewer displaced supercells; and the standard primitive cell follows the Setyawan–Curtarolo convention that `HighSymmKpath` uses in `get_band_path`, so the band path coordinates are correct for it.
 
 ### `get_band_path(primitive_material)`
 
-**What it does:** finds the high-symmetry path through the Brillouin zone for the structure and returns it in the form phonopy needs.
-
-**Steps:**
-1. `HighSymmKpath` works out the high-symmetry points and the path for this lattice type.
-2. The path comes as a list of sections. Each section is a continuous run of labels, e.g. `["\\Gamma", "X", "W", "K", "\\Gamma", "L", "U", "W", "L", "K"]` and then `["U", "X"]` for FCC.
-3. For each label the fractional q-point coordinates are looked up.
-4. Labels that start with a backslash (such as `\Gamma`) are wrapped in `$...$` so matplotlib draws the Greek letter.
-
-**Relies on:** pymatgen `HighSymmKpath`; a structure that is already the standard primitive cell (from `get_primitive_cell`).
+**What it does:** finds the high-symmetry path through the Brillouin zone with pymatgen's `HighSymmKpath` (Setyawan–Curtarolo) and returns it in the form phonopy needs.
 
 **Returns:**
-- `band_path`: a list of sections, each a list of `[qx, qy, qz]` coordinates.
-- `band_labels`: one flat list of labels in the same order.
+- `band_path`: a list of continuous sections, each a list of `[qx, qy, qz]` fractional coordinates;
+- `band_labels`: one flat list of labels in the same order, with Greek labels such as `\Gamma` wrapped in `$...$` for matplotlib.
 
-**Used by:** `band_calculator` and `plot_band_comparison`.
+**Used by:** `band_calculator`, `plot_bands`.
 
 ---
 
@@ -125,22 +126,24 @@ results/
 
 ### `relax_structure(material, calc, folder)`
 
-**What it does:** relaxes the atomic positions **and** the cell with the MLIP, so the phonons are calculated at that model's own equilibrium geometry.
+**What it does:** relaxes the structure with the MLIP, so the phonons are calculated at that model's own equilibrium geometry. `material` is changed in place.
 
 **Steps:**
-1. Attaches the calculator: `material.calc = calc`.
-2. Wraps the structure in `FrechetCellFilter`, which lets the optimiser change the cell shape and volume as well as the atom positions.
-3. Runs the `FIRE` optimiser until the largest force is below `FMAX` or `MAX_STEPS` is reached.
-4. Writes the final structure to `relaxed.cif`.
+1. Attaches the calculator.
+2. If `RELAX_SYMMETRY`: attaches ASE's `FixSymmetry` constraint, which removes force and cell changes that would break the starting space group. It uses ASE's own default tolerance (`symprec = 0.01`), not `SYMMETRY_TOLERANCE`.
+3. If `RELAX_CELL`: wraps the structure in `FrechetCellFilter`, so the cell shape and volume relax as well as the atom positions; otherwise only the positions relax.
+4. Runs the optimiser chosen by `OPTIMIZER` (`OPTIMIZERS[OPTIMIZER]`) one step at a time (`irun` with `fmax=0`, so ASE does not stop by itself). After each step it checks:
+   - the largest force (measured as ASE does, including the cell when it relaxes) is below `FMAX` (`RELAX_FMAX`), **and**
+   - the energy change per atom since the last step is below `ENERGY_TOLERANCE` (`ENERGY_TOLERANCE = 0` switches this check off).
 
-**Relies on:**
-- An ASE calculator (from `MODELS` in the parser file).
-- A run folder that already exists.
-- `FMAX`, `MAX_STEPS`.
+   Both true: converged, stop. Otherwise it stops after `MAX_STEPS`.
+5. Writes the final structure to `relaxed.cif`.
 
-**Returns:** `(converged, steps)`: `True`/`False`, and the number of optimiser steps taken.
+**Returns:** `(converged, steps, energy_change)`: `True`/`False`, the number of optimiser steps, and the last energy change per atom (eV).
 
 **Files written:** `relax.log`, `relaxed.traj`, `relaxed.cif`.
+
+**Good to know:** the `FixSymmetry` constraint is left on the structure after relaxation (Sonny's choice, 23 Nov, to discuss with the supervisor). So when `RELAX_SYMMETRY` is on, the runner's `max_force` is the symmetry-averaged force, and pymatgen prints a warning about unsupported constraints during the symmetry check. Neither changes the phonons.
 
 ---
 
@@ -151,197 +154,178 @@ results/
 **What it does:** the finite-displacement phonon calculation. phonopy decides which atoms to move, the MLIP calculates the forces, and phonopy turns the forces into force constants.
 
 **Steps:**
-1. Converts the relaxed ASE structure to a `PhonopyAtoms` object (symbols, cell, fractional positions).
-2. Creates a `Phonopy` object with:
-   - `supercell_matrix` = `supercell` × `supercell` × `supercell` (diagonal);
-   - `primitive_matrix="P"`, which means "the cell I gave you is already primitive, do not change it".
-3. `generate_displacements(distance=displacement, is_plusminus=IS_PLUSMINUS)`: phonopy uses the crystal symmetry to find the smallest set of displacements needed.
-4. Prints the number of displaced supercells and saves `phonopy_disp.yaml`.
-5. For each displaced supercell: rebuilds it as an ASE `Atoms`, attaches the calculator, and stores `get_forces()`.
-6. Gives the forces to phonopy and calls `produce_force_constants()`.
-7. Saves `phonopy_params.yaml` including the force constants.
+1. Converts the relaxed ASE structure to a `PhonopyAtoms` object.
+2. Creates `Phonopy` with `supercell_matrix = supercell` (the 3×3 matrix from `DIM`), `primitive_matrix = PRIMITIVE_AXES`, `symprec = SYMMETRY_TOLERANCE`, `is_symmetry = SYMMETRY`, `log_level = PHONOPY_LOG_LEVEL`.
+3. `generate_displacements(distance=displacement, is_plusminus=IS_PLUSMINUS)`.
+4. Prints the number of displaced supercells and saves `phonopy_disp.yaml` (structure and displacements, no forces) **before** the forces, so it survives a crash in the force loop.
+5. For each displaced supercell: rebuilds it as an ASE `Atoms`, attaches the calculator, stores `get_forces()`.
+6. `produce_force_constants(fc_calculator=FC_CALCULATOR)`; then `symmetrize_force_constants()` if `FC_SYMMETRY`.
+7. Writes the forces to `FORCE_SETS` (`write_FORCE_SETS`).
+8. If `WRITE_FORCE_CONSTANTS`: writes `force_constants.hdf5` (`HDF5` on) or `FORCE_CONSTANTS` (off).
 
-**Relies on:**
-- The **relaxed primitive cell** from `relax_structure`. If the structure is not relaxed, leftover forces contaminate the force constants.
-- An ASE calculator.
-- `supercell` and `displacement` from the runner (`SUPERCELL`, `DISPLACEMENT`).
-- `IS_PLUSMINUS`.
+**Relies on:** the **relaxed primitive cell** from `relax_structure` (leftover forces would contaminate the force constants); an ASE calculator; `supercell` (matrix) and `displacement` from the runner.
 
 **Returns:** the `Phonopy` object, with force constants.
 
-**Files written:**
-- `phonopy_disp.yaml`: structure and displacements only (written *before* the forces, so it survives a crash in the force loop).
-- `phonopy_params.yaml`: structure, displacements, forces and force constants. This is the file `phonon_loader` reads for the plots.
+**Good to know:**
+- `supercell` must be the 3×3 matrix (`SUPERCELL_MATRIX` in the runner), not the `2x2x2` label; the label gives "supercell_matrix shape has to be (3,) or (3, 3)".
+- `FC_CALCULATOR = symfc` or `alm` needs the `symfc` or `alm` package installed in that environment.
+- With `PRIMITIVE_AXES = AUTO`, phonopy can reorder the axes of rhombohedral and hexagonal cells relative to pymatgen's, which misplaces band labels. There is no warning for this in the current code.
+
+### `load_run_phonon(run_folder)`
+
+**What it does:** rebuilds a saved run as a `Phonopy` object from its `phonopy_disp.yaml` and `FORCE_SETS`, with the force constants refitted **using the settings the run was calculated with**.
+
+**Steps:**
+1. Returns `None` if either file is missing.
+2. Reads the run's `run_config.txt` with `read_config(..., strict=False)` (so copies written by older versions of the workflow still read).
+3. Takes `PRIMITIVE_AXES`, `SYMMETRY`, `SYMMETRY_TOLERANCE`, `FC_CALCULATOR` and `FC_SYMMETRY` from it. Any missing (or no `run_config.txt` at all) take the current config's value, with a note naming them.
+4. `phonopy.load(...)` with those settings and `log_level = PHONOPY_LOG_LEVEL`.
+
+**Used by:** `MLIP_plotter.py`. Changing the config later does not change how an old run is rebuilt.
+
+---
 
 ## 5. Stage 3: band structure
 
 ### `band_calculator(phonon, band_path, band_labels)`
 
-**What it does:** calculates the phonon frequencies along the band path for any `Phonopy` object (an MLIP result or the reference).
+**What it does:** calculates the frequencies along the band path for any `Phonopy` object (an MLIP run or a reference).
 
-**Steps:**
-1. `get_band_qpoints_and_path_connections` fills in `BAND_POINTS` q-points along each segment of the path and works out which segments join on to the next.
-2. `phonon.run_band_structure(...)` calculates the frequencies.
-3. Picks out the parts needed from phonopy's band structure dictionary.
+**Steps:** `get_band_qpoints_and_path_connections` fills in `BAND_POINTS` q-points per section and works out which sections join; `phonon.run_band_structure(...)` calculates the frequencies.
 
-**Relies on:**
-- A `Phonopy` object that has force constants (from `force_constant_calculator`, `phonon_loader`, or the reference parser).
-- `band_path` and `band_labels` from `get_band_path`.
-- `BAND_POINTS`.
-
-**Returns a dictionary:**
-- `"distances"`: list of arrays, the x-axis positions for each segment.
-- `"frequencies"`: list of arrays, shape (q-points, bands), in THz.
-- `"connections"`: list of `True`/`False`, whether each segment joins the next.
+**Returns a dictionary:** `"distances"` (x-axis positions per section), `"frequencies"` (per section, shape (q-points, bands), THz), `"connections"` (whether each section joins the next).
 
 ### `save_bands(phonon, folder)`
 
-**What it does:** writes the band structure to `band.yaml` in the run folder.
-
-**Relies on:** `band_calculator` having been run on the same `phonon` object first. Otherwise there is no band structure to write.
+Writes the band structure from the last `band_calculator` call on this `phonon`: `band.hdf5` if `HDF5`, otherwise `band.yaml`. (Its docstring still says `band.yaml` only.)
 
 ### `lowest_band_frequency(bands)`
 
-**What it does:** returns the single lowest frequency (THz) anywhere on the band path.
-
-**Relies on:** the `bands` dictionary from `band_calculator`.
-
-**Used for:** detecting imaginary modes. The runner compares the value with `IMAGINARY_LIMIT` (-0.05 THz), which is defined **in the runner**, not in this file.
+Returns the single lowest frequency (THz) anywhere on the band path. The runner compares it with `IMAGINARY_LIMIT` to flag imaginary modes.
 
 ### `gamma_optical_frequency(phonon)`
 
-**What it does:** calculates the frequencies at the Γ point (q = 0, 0, 0) and returns the **highest** one, in THz.
+Calculates the frequencies at Γ and returns the **highest**, in THz. Used for the single-number comparison with the reference (`gamma_percent_diff`). Does not need `band_calculator` first.
 
-**Relies on:** a `Phonopy` object with force constants. It does not need `band_calculator` to have been run.
+---
 
-**Used for:** the single-number comparison with the reference (`gamma_percent_diff` in the CSV). The runner calls it once on the MLIP result and once on the reference.
+## 6. Stage 4: phonon properties
 
-## 6. Results table
+### `phonon_properties(phonon, folder)`
+
+**What it does:** the optional post-processing switched on in the config.
+- `TPROP`: `run_mesh(MESH)`, then `run_thermal_properties(TMIN, TMAX, TSTEP)` (free energy, entropy, heat capacity), written to `thermal_properties.yaml`.
+- `IRREPS` set (a q-point and optional degeneracy tolerance): irreducible representations at that q-point, written to `irreps.yaml` (and printed if `SHOW_IRREPS`). phonopy always writes this file into the current folder, so the function changes into the run folder while it writes.
+
+**Returns:** the list of files written (empty if both are off).
+
+**Good to know:** an even `MESH` such as `20 20 20` makes phonopy print a `MeshSymmetryFallbackWarning`: the shifted mesh loses the symmetry reduction, so it is slower, but the thermal properties are still right.
+
+---
+
+## 7. Results table
 
 ### `results_table(row)`
 
-**What it does:** appends one row to `results/summary.csv`. If the file does not exist yet, it writes the `CSV_COLUMNS` header first.
+**What it does:** appends one row to `results/summary.csv`, writing the `CSV_COLUMNS` header first if the file is new.
 
-**Relies on:**
-- `RESULTS_FOLDER`, `CSV_COLUMNS`.
-- The runner passing the values **in the same order as `CSV_COLUMNS`**. Nothing checks this.
-
-**The columns:**
+**Relies on:** the runner passing the values **in the same order as `CSV_COLUMNS`**. Nothing checks this.
 
 | Column | Meaning |
 |---|---|
 | `date_time` | When the row was written |
-| `material`, `model`, `supercell`, `displacement_A` | What was run |
+| `material`, `model`, `supercell`, `displacement_A` | What was run (`supercell` is the label, e.g. `2x2x2`) |
 | `status` | `OK`, or `CRASHED in <stage>: <error>` |
 | `relax_converged`, `relax_steps`, `max_force_eV_per_A` | Relaxation quality |
 | `space_group_before`, `space_group_after`, `symmetry_kept` | Symmetry check |
 | `volume_per_atom_A3` | Relaxed volume per atom |
 | `gamma_optical_thz`, `ref_gamma_optical_thz`, `gamma_percent_diff` | Γ-point comparison with the reference (blank if no reference) |
 | `lowest_freq_thz`, `imaginary_modes` | Dynamical stability check |
-| `load_s`, `relax_s`, `forces_s`, `bands_s` | Wall-clock time of each stage (the values returned by `performance_log`, section 9) |
+| `load_s`, `relax_s`, `forces_s`, `bands_s` | Wall-clock time of each stage (from `performance_log`) |
 
-## 7. Comparison plot
+**Good to know:** the symmetry settings are not in the table, so runs with symmetry on and off give rows that look the same. A `run` column with the folder name is on the fix list.
 
-### `phonon_loader(material_name, supercell, displacement)`
+---
 
-**What it does:** finds every model that has saved results for this material at this supercell and displacement, and loads each one as a `Phonopy` object.
+## 8. Plots
 
-**Steps:**
-1. Looks in `results/<material>/`. If the folder does not exist, returns an empty dictionary.
-2. For each sub-folder (one per model, in alphabetical order), looks for `sc<supercell>_d<displacement>/phonopy_params.yaml`.
-3. Loads each file found with `phonopy.load`.
+### `plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure_file, reference_label="REF", styles=None)`
 
-**Relies on:**
-- `phonopy_params.yaml` files written by `force_constant_calculator` in earlier runs.
-- The folder naming from `get_run_folder`.
-
-**Returns:** `{model name: Phonopy object}`. The model name is the folder name.
-
-### `plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement)`
-
-**What it does:** draws the band structure of every model on one figure, with the reference in black underneath, and saves it as a PNG.
+**What it does:** draws the band structure of every `Phonopy` object in `datasets` (`{label: Phonopy}`) on one figure, with the reference underneath, and saves it.
 
 **Steps:**
-1. **Reference first** (if there is one): calculates its bands with `band_calculator` and plots them in black, line width 1.5. Its x-axis positions are stored and reused for everything else.
-2. **Each model:** calculates its bands and plots them in matplotlib's default colours (`C0`, `C1`, ...), line width 1.0. If there was no reference, the first model's x-axis is used.
-3. Only the first line of each data set is given a label, so the legend has one entry per data set.
-4. **Tick marks:** one at the start and end of every segment. Where the path jumps (for example K to U in FCC), the tick gets a combined label such as `K|U`.
-5. Adds grey vertical lines at the ticks, a horizontal line at zero, the y-axis label, a title and the legend.
-6. Saves at 200 dpi and closes the figure.
+1. **Reference first** (if not `None`): bands from `band_calculator`, drawn in black, line width 1.5. Its x-axis positions are reused for everything else.
+2. **Each data set:** bands drawn with line width 1.0, in the colour and line style from `styles[label]` if `styles` is given, otherwise matplotlib's colour cycle (`C0`, `C1`, ...) with solid lines. If there was no reference, the first data set's x-axis is used.
+3. Only the first line of each data set is labelled, so the legend has one entry each.
+4. **Ticks:** at the start and end of every section; where the path jumps (e.g. K to U), the tick gets a combined label `K|U`.
+5. Grey lines at the ticks and at zero, y-axis label, title, legend; saved at 200 dpi.
 
-**Relies on:**
-- `phonons` from `phonon_loader`.
-- `reference_phonon` from `reference_data_parser` in the parser file (or `None`).
-- `band_path`, `band_labels` from `get_band_path`.
-- `band_calculator`.
-- The folder `results/<material>/` already existing (it does if `phonon_loader` found anything).
+**Returns:** the path of the saved figure.
 
-**Returns:** the path of the saved figure, `results/<material>/band_comparison_sc<supercell>_d<displacement>.png`.
+**Used by:** `plot_run_bands` (runner) and `MLIP_plotter.py`, which passes `styles` to give each model its `MODELS` colour and each run of a model its own line style.
 
-## 8. Summary table
+### `plot_run_bands(material_name, model_name, phonon, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF", colour=None)`
+
+**What it does:** one run against the reference. Calls `plot_bands` with `{model_name: phonon}`, the run folder's name as the title, and `colour` as a solid-line style (matplotlib's first colour if `colour` is not given). The runner passes `MODELS[MODEL]["colour"]`.
+
+**Saves:** `band_structure.png` in the run folder.
+
+---
+
+## 9. Summary table
 
 | Function | Called by | Relies on | Returns / writes |
 |---|---|---|---|
-| `get_run_folder` | runner | `RESULTS_FOLDER` | folder path (not created) |
+| `get_run_folder` | runner, `plot_run_bands`, plotter | `RESULTS_FOLDER`, symmetry settings | folder path (not created) |
 | `get_space_group` | runner | pymatgen | `(symbol, number)` |
-| `get_primitive_cell` | runner | pymatgen | primitive ASE `Atoms` |
-| `get_band_path` | runner | pymatgen, a standard primitive cell | `band_path`, `band_labels` |
-| `relax_structure` | runner | calculator, `FMAX`, `MAX_STEPS`, existing folder | `(converged, steps)`; `relax.log`, `relaxed.traj`, `relaxed.cif`; changes `material` in place |
-| `force_constant_calculator` | runner | relaxed primitive cell, calculator, `IS_PLUSMINUS` | `Phonopy` object; `phonopy_disp.yaml`, `phonopy_params.yaml` |
-| `band_calculator` | runner, `plot_band_comparison` | `Phonopy` with force constants, `get_band_path` output, `BAND_POINTS` | `bands` dictionary |
-| `save_bands` | runner | `band_calculator` run first | `band.yaml` |
+| `get_primitive_cell` | runner, plotter | pymatgen | primitive ASE `Atoms` |
+| `get_band_path` | runner, plotter | pymatgen, a standard primitive cell | `band_path`, `band_labels` |
+| `relax_structure` | runner | calculator, relaxation settings, existing folder | `(converged, steps, energy_change)`; `relax.log`, `relaxed.traj`, `relaxed.cif`; changes `material` in place |
+| `force_constant_calculator` | runner | relaxed primitive cell, calculator, phonopy settings | `Phonopy` object; `phonopy_disp.yaml`, `FORCE_SETS`, force constants file |
+| `load_run_phonon` | plotter | `phonopy_disp.yaml`, `FORCE_SETS`, `run_config.txt` | `Phonopy` object or `None` |
+| `band_calculator` | runner, `plot_bands` | `Phonopy` with force constants, `get_band_path` output, `BAND_POINTS` | `bands` dictionary |
+| `save_bands` | runner | `band_calculator` run first | `band.hdf5` / `band.yaml` |
+| `phonon_properties` | runner | `Phonopy` with force constants, TPROP/IRREPS settings | list of files written |
 | `lowest_band_frequency` | runner | `bands` dictionary | float, THz |
 | `gamma_optical_frequency` | runner | `Phonopy` with force constants | float, THz |
 | `results_table` | runner | `CSV_COLUMNS`, row in the right order | appends to `summary.csv` |
-| `phonon_loader` | runner | saved `phonopy_params.yaml` files | dict of `Phonopy` objects |
-| `plot_band_comparison` | runner | `phonon_loader`, `band_calculator`, reference from parser | PNG figure path |
+| `plot_bands` | `plot_run_bands`, plotter | `band_calculator` | PNG figure path |
+| `plot_run_bands` | runner | `plot_bands`, `get_run_folder` | `band_structure.png` path |
 | `start_timer` | runner | `time` | `(wall time, CPU time)` at this moment |
 | `get_cores_available` | `performance_log` | `os` | number of cores |
 | `performance_log` | runner | `start_timer` value, `PERFORMANCE_COLUMNS` | wall time in seconds; appends to `performance_log.csv` |
 
-## 9. Performance log
+---
 
-These three functions are at the top of the file. The runner wraps each stage in a timer, so every stage of every run gets one row in `results/performance_log.csv`.
+## 10. Performance log
+
+The runner wraps each stage in a timer, so every stage of every run gets one row in `results/performance_log.csv`.
 
 ```python
 timer = start_timer()
-converged, steps = relax_structure(atoms, calc, folder)
+converged, steps, energy_change = relax_structure(atoms, calc, folder)
 relax_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
 ```
 
 ### `start_timer()`
 
-**What it does:** returns the wall-clock time (`time.time()`) and the CPU time of this process (`time.process_time()`) at this moment, as a pair. Call it just before a stage starts and pass the result to `performance_log` when the stage has finished.
+Returns the wall-clock time (`time.time()`) and this process's CPU time (`time.process_time()`) as a pair. Call it just before a stage and pass the result to `performance_log` afterwards.
 
 ### `get_cores_available()`
 
-**What it does:** returns the number of CPU cores this process is allowed to use.
-
-- On Linux it uses `os.sched_getaffinity`, which gives the cores given to the job on a supercomputer, not the whole node.
-- On Windows and Mac it uses `os.cpu_count`, which is every core in the machine.
+Returns the number of CPU cores this process may use: on Linux `os.sched_getaffinity` (the cores given to the job on a supercomputer, not the whole node); on Windows and Mac `os.cpu_count` (every core in the machine).
 
 ### `performance_log(material_name, model_name, device, supercell, displacement, stage, timer)`
 
-**What it does:** works out how long the stage took, appends one row to `results/performance_log.csv`, and returns the wall time in seconds.
-
-**Steps:**
-1. Wall time = now minus the wall time in `timer`. CPU time = now minus the CPU time in `timer`.
-2. `cores_used` = CPU time ÷ wall time (the average number of busy cores).
-3. `cpu_usage_percent` = cores used ÷ cores available × 100.
-4. Creates `results/` if needed, writes the `PERFORMANCE_COLUMNS` header if the file is new, then appends the row.
-
-**Relies on:** a `timer` value from `start_timer`, `get_cores_available`, `RESULTS_FOLDER`, `PERFORMANCE_COLUMNS`.
-
-**Returns:** the wall time in seconds. The runner stores it as `load_time`, `relax_time`, `forces_time` or `bands_time`, and these go into `summary.csv` as `load_s`, `relax_s`, `forces_s` and `bands_s`.
-
-**The columns:**
+Works out the stage's wall time and CPU time, `cores_used` = CPU time ÷ wall time, and `cpu_usage_percent` = cores used ÷ cores available × 100; appends one row to `results/performance_log.csv` (header first if new); returns the wall time in seconds.
 
 | Column | Meaning |
 |---|---|
 | `date_time` | When the row was written (the end of the stage) |
 | `material` | Material name, or `all` for the model load |
 | `model`, `device`, `supercell`, `displacement_A` | What was run |
-| `stage` | `model load`, `relaxation`, `force constants` or `band structure` |
+| `stage` | `model load`, `relaxation`, `force constants`, `band structure` or `phonon properties` |
 | `wall_time_s` | Time taken |
 | `cpu_time_s` | Compute time, summed over all cores |
 | `cores_used` | CPU time ÷ wall time |
