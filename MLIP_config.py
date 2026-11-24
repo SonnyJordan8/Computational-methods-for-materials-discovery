@@ -258,6 +258,25 @@ def read_config(path):
     config["_IN_FILE"] = seen
     return config
 
+# Settings that change the relaxed structure, the forces or the force constants. A run folder
+# may only be reused by a run with the same values of all of these (see changed_settings).
+# The others (run switches, plotting, post-processing, folders) can change between runs.
+CALCULATION_SETTINGS = [
+    "DTYPE",
+    "OPTIMIZER", "RELAX_CELL", "RELAX_FMAX", "ENERGY_TOLERANCE", "MAX_STEPS", "RELAX_SYMMETRY",
+    "DIM", "PRIMITIVE_AXES", "DISPLACEMENT_DISTANCE", "PM", "MAGMOM",
+    "SYMMETRY", "SYMMETRY_TOLERANCE", "FC_CALCULATOR", "FC_SYMMETRY",
+]
+
+def changed_settings(saved_config_file):
+    """
+    Compares a run's saved copy of the config with the current CONFIG.
+    Returns a list of the calculation settings that differ, as "KEY: saved -> now".
+    An empty list means the run was made with the same calculation settings.
+    """
+    saved = read_config(saved_config_file)
+    return [f"{key}: {saved[key]!r} -> {CONFIG[key]!r}"
+            for key in CALCULATION_SETTINGS if saved[key] != CONFIG[key]]
 
 # Phonopy setting tag -> (name of the same value in phonopy's own reader, how to compare it with ours)
 PHONOPY_TAGS = {
@@ -344,7 +363,10 @@ def supercell_label(dim):
 
 def find_config_file():
     """
-    The config file is read.
+    The config file to read: given on the command line with --config, e.g.
+    python MLIP_runner.py --config my_settings.txt
+    otherwise config_file.txt in the code folder. parse_known_args ignores
+    arguments meant for something else (e.g. Jupyter passes -f <file>).
     """
     parser = argparse.ArgumentParser(description="uMLIP phonon benchmarking workflow")
     parser.add_argument("--config", default=str(CODE_FOLDER / "config_file.txt"),
