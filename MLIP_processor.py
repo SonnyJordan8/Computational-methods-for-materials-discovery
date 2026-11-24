@@ -8,7 +8,8 @@ import time
 from ase import Atoms
 from ase.filters import FrechetCellFilter
 from ase.io import write
-from ase.optimize import FIRE
+from ase.optimize import FIRE, BFGS, LBFGS, BFGSLineSearch
+from ase.constraints import FixSymmetry
 
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -16,27 +17,55 @@ from pymatgen.symmetry.bandstructure import HighSymmKpath
 
 import phonopy
 from phonopy import Phonopy
-from phonopy.file_IO import write_FORCE_SETS
+from phonopy.file_IO import write_FORCE_SETS, write_FORCE_CONSTANTS, write_force_constants_to_hdf5
 from phonopy.structure.atoms import PhonopyAtoms
 from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
 
+# Settings for calculations can be changed in the config_file.txt
+from MLIP_config import CONFIG
 
-# Results are saved in a "results" folder next to this file
-RESULTS_FOLDER = Path(__file__).resolve().parent / "results"
 
-# Settings that are the same for every run - May need to be edited depending on how tight convergence is needed
+# Settings - all set in config_file.txt, read by MLIP_config.py
 
-IS_PLUSMINUS = True       # displace in both + and - directions - Orb-v3 paper Appendix G
-FMAX = 0.005              # relaxation stops when all forces are below this, eV/Angstrom - Loew et al. 2025
-MAX_STEPS = 500           # stops a stuck relaxation - Loew et al. 2025 / MatRIS paper
-BAND_POINTS = 51          # q-points per section of the band path - phonopy docs, "Band structure" section example
+# Folder where the results are saved
+RESULTS_FOLDER = CONFIG["RESULTS_FOLDER"]
+
+# ASE relaxation
+OPTIMIZER = CONFIG["OPTIMIZER"]             # "FIRE", "BFGS", "LBFGS" or "BFGSLineSearch"
+RELAX_CELL = CONFIG["RELAX_CELL"]           # relax the cell as well as the atom positions
+FMAX = CONFIG["RELAX_FMAX"]                 # relaxation stops when all forces are below this, eV/Angstrom
+ENERGY_TOLERANCE = CONFIG["ENERGY_TOLERANCE"]  # ...and the energy change per step is below this, eV/atom (0 = off)
+MAX_STEPS = CONFIG["MAX_STEPS"]             # stops a stuck relaxation
+RELAX_SYMMETRY = CONFIG["RELAX_SYMMETRY"]   # keep the starting space group during relaxation
+
+# The ASE optimiser class for each OPTIMIZER name
+OPTIMIZERS = {"FIRE": FIRE, "BFGS": BFGS, "LBFGS": LBFGS, "BFGSLineSearch": BFGSLineSearch}
+
+# Phonopy
+PRIMITIVE_AXES = CONFIG["PRIMITIVE_AXES"]   # "P", "auto" or a 3x3 matrix
+IS_PLUSMINUS = CONFIG["PM"]                 # displace in both + and - directions (phonopy tag PM)
+SYMMETRY = CONFIG["SYMMETRY"]               # use crystal symmetry to reduce the displacements
+SYMMETRY_TOLERANCE = CONFIG["SYMMETRY_TOLERANCE"]
+FC_CALCULATOR = CONFIG["FC_CALCULATOR"]     # "traditional", "symfc" or "alm"
+FC_SYMMETRY = CONFIG["FC_SYMMETRY"]         # symmetrise the force constants after fitting
+PHONOPY_LOG_LEVEL = CONFIG["PHONOPY_LOG_LEVEL"]  # 0 quiet, 1 normal, 2 verbose
+BAND_POINTS = CONFIG["BAND_POINTS"]         # q-points per section of the band path
+
+# Phonopy post-processing
+MESH = CONFIG["MESH"]                       # q-point mesh for thermal properties
+TPROP = CONFIG["TPROP"]                     # calculate thermal properties
+TMIN, TMAX, TSTEP = CONFIG["TMIN"], CONFIG["TMAX"], CONFIG["TSTEP"]   # K
+IRREPS = CONFIG["IRREPS"]                   # None, or (q-point, degeneracy tolerance)
+SHOW_IRREPS = CONFIG["SHOW_IRREPS"]         # also print the irreducible representations
+HDF5 = CONFIG["HDF5"]                       # write band structure and force constants as .hdf5
+WRITE_FORCE_CONSTANTS = CONFIG["WRITE_FORCE_CONSTANTS"]   # save the force constants too
 
 # Files saved in each run folder (the same layout as phononDB): the structure and displacements
 # in a small yaml file, and the forces in a separate FORCE_SETS file. The force constants are
 # not saved - they are recomputed from FORCE_SETS when a run is loaded, because a saved force
 # constant matrix gets very large for big supercells.
-DISPLACEMENTS_FILE = "phonopy_disp.yaml"
-FORCE_SETS_FILE = "FORCE_SETS"
+DISPLACEMENTS_FILE = CONFIG["DISPLACEMENTS_FILE"]
+FORCE_SETS_FILE = CONFIG["FORCE_SETS_FILE"]
 
 # Column names of results/summary.csv
 CSV_COLUMNS = [
@@ -105,7 +134,23 @@ def performance_log(material_name, model_name, device, supercell, displacement, 
         ])
     return wall_time
 
-# Folder generation for one run
+# Run label generation for one run followed by Folder generation. 
+
+def run_label(supercell, displacement):
+    """
+    The name of a run folder; supercell, displacement and the symmetry settings, so runs with
+    symmetry on and off are kept apart:
+        sc2x2x2_d0.03_sym-on                  SYMMETRY, RELAX_SYMMETRY and FC_SYMMETRY all on
+        sc2x2x2_d0.03_sym-off                 SYMMETRY off (phonopy displacements)
+        sc2x2x2_d0.03_sym-off_relaxsym-off    and RELAX_SYMMETRY off (ASE relaxation)
+    RELAX_SYMMETRY and FC_SYMMETRY are only added to the name when they are off.
+    """
+    label = f"sc{supercell}_d{displacement}_sym-{'on' if SYMMETRY else 'off'}"
+    if not RELAX_SYMMETRY:
+        label = label + "_relaxsym-off"
+    if not FC_SYMMETRY:
+        label = label + "_fcsym-off"
+    return label
 
 def get_run_folder(material_name, model_name, supercell, displacement):
     """
@@ -113,7 +158,7 @@ def get_run_folder(material_name, model_name, supercell, displacement):
     The folder is not created here.
 
     """
-    return RESULTS_FOLDER / material_name / model_name / f"sc{supercell}_d{displacement}"
+    return RESULTS_FOLDER / material_name / model_name / run_label(supercell, displacement)
 
 # Symmetry finder
 
@@ -149,7 +194,6 @@ def get_band_path(primitive_material):
     kpath_object = HighSymmKpath(structure_pmg)
     # Dictionary, label -> q-point coordinates
     high_symm_points = kpath_object.kpath["kpoints"]
-
     # band_path: one list of q-points per continuous section of the path
     # band_labels: the label of every q-point, in the same order, as one flat list
     band_path = []
@@ -169,16 +213,53 @@ def get_band_path(primitive_material):
 
 def relax_structure(material, calc, folder):
     """
-    Returns the relaxed structure of the material using the MLIP and FIRE + FrechetCellFilter
-    Saves the relax.log, relaxed.traj and the relaxed.cif in the folder
-    the materials object is changed into the relaxed structure.
+    Relaxes the material with the MLIP. The material object is changed into the relaxed structure.
+    Settings from the config:
+      OPTIMIZER         which ASE optimiser (FIRE, BFGS, LBFGS, BFGSLineSearch)
+      RELAX_CELL        True: cell and atom positions (FrechetCellFilter); False: atom positions only
+      RELAX_FMAX        force convergence, eV/Angstrom
+      ENERGY_TOLERANCE  energy convergence, eV/atom per step (0 = force convergence only)
+      MAX_STEPS         the relaxation stops here if it has not converged
+      RELAX_SYMMETRY    keep the starting space group
+    Saves the relax.log, relaxed.traj and the relaxed.cif in the folder.
+    Returns converged (True/False), the number of steps, and the last energy change per atom (eV).
     """
     material.calc = calc
-    cell_filter = FrechetCellFilter(material)
-    optimiser = FIRE(cell_filter, logfile = str(folder / "relax.log"), trajectory = str(folder / "relaxed.traj"))
-    converged = optimiser.run(fmax = FMAX, steps = MAX_STEPS)
+    if RELAX_SYMMETRY:
+        # Forces and cell changes that would break the starting space group are removed
+        material.set_constraint(FixSymmetry(material))
+
+    # What the optimiser moves: the atoms only, or the atoms and the cell
+    if RELAX_CELL:
+        optimizable = FrechetCellFilter(material)
+    else:
+        optimizable = material
+    optimiser = OPTIMIZERS[OPTIMIZER](optimizable, logfile = str(folder / "relax.log"),
+                                      trajectory = str(folder / "relaxed.traj"))
+
+    # ASE's own run() only checks forces, so step through the optimiser and check both
+    # forces and energy after every step. fmax=0 stops ASE ending the run by itself.
+    number_of_atoms = len(material)
+    previous_energy = None
+    energy_change = float("nan")
+    converged = False
+    for _ in optimiser.irun(fmax = 0.0, steps = MAX_STEPS):
+        # Largest force, measured the same way as ASE's fmax (includes the cell when it relaxes)
+        forces = optimizable.get_forces()
+        largest_force = np.sqrt((forces ** 2).sum(axis = 1).max())
+        energy = material.get_potential_energy() / number_of_atoms
+        if previous_energy is not None:
+            energy_change = abs(energy - previous_energy)
+        previous_energy = energy
+
+        forces_converged = largest_force < FMAX
+        energy_converged = ENERGY_TOLERANCE <= 0 or energy_change < ENERGY_TOLERANCE
+        if forces_converged and energy_converged:
+            converged = True
+            break
+
     write(str(folder / "relaxed.cif"), material)
-    return bool(converged), optimiser.nsteps
+    return converged, optimiser.nsteps, energy_change
 
 # Stage 2: force constant calculation
 
@@ -200,8 +281,11 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
 
     phonon = Phonopy(
         cell,
-        supercell_matrix=[[supercell, 0, 0], [0, supercell, 0], [0, 0, supercell]],
-        primitive_matrix="P",
+        supercell_matrix=supercell,
+        primitive_matrix=PRIMITIVE_AXES,
+        symprec=SYMMETRY_TOLERANCE,
+        is_symmetry=SYMMETRY,
+        log_level=PHONOPY_LOG_LEVEL,
     )
 
     phonon.generate_displacements(distance = displacement, is_plusminus = IS_PLUSMINUS)
@@ -222,10 +306,19 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
         forces.append(displaced.get_forces())
 
     phonon.forces = forces
-    phonon.produce_force_constants()
+    phonon.produce_force_constants(fc_calculator=FC_CALCULATOR)
+    
+    if FC_SYMMETRY:
+        phonon.symmetrize_force_constants()    
+    write_FORCE_SETS(phonon.dataset, filename=str(folder / FORCE_SETS_FILE)) 
 
-    write_FORCE_SETS(phonon.dataset, filename=str(folder / FORCE_SETS_FILE))
+    if WRITE_FORCE_CONSTANTS:
+        if HDF5:
+            write_force_constants_to_hdf5(phonon.force_constants, filename=str(folder / "force_constants.hdf5"))
+        else:
+            write_FORCE_CONSTANTS(phonon.force_constants, filename=str(folder / "FORCE_CONSTANTS"))
     return phonon
+    
 
 def load_run_phonon(run_folder):
     """
@@ -236,8 +329,16 @@ def load_run_phonon(run_folder):
     force_sets_file = run_folder / FORCE_SETS_FILE
     if not (displacements_file.exists() and force_sets_file.exists()):
         return None
-    return phonopy.load(str(displacements_file), force_sets_filename=str(force_sets_file))
-
+    return phonopy.load(
+        str(displacements_file),
+        force_sets_filename=str(force_sets_file),
+        primitive_matrix=PRIMITIVE_AXES,
+        is_symmetry=SYMMETRY,
+        symprec=SYMMETRY_TOLERANCE,
+        fc_calculator=FC_CALCULATOR,
+        symmetrize_fc=FC_SYMMETRY,
+        log_level=PHONOPY_LOG_LEVEL,                     # quiet: runs are reloaded for every plot
+    )
 # Stage 3: Band structure
 
 def band_calculator(phonon, band_path, band_labels):
@@ -269,7 +370,41 @@ def save_bands(phonon, folder):
     Saves the band structure as band.yaml in the folder.
 
     """
-    phonon.write_yaml_band_structure(filename=str(folder / "band.yaml"))
+    if HDF5:
+        phonon.write_hdf5_band_structure(filename=str(folder / "band.hdf5"))
+    else:
+        phonon.write_yaml_band_structure(filename=str(folder / "band.yaml"))
+
+def phonon_properties(phonon, folder):
+    """
+    Optional post-processing, switched on in the config:
+      TPROP   thermal properties on the MESH q-point mesh, from TMIN to TMAX in steps of TSTEP (K),
+              written to thermal_properties.yaml
+      IRREPS  irreducible representations at a q-point, written to irreps.yaml
+              (and printed if SHOW_IRREPS is True)
+    Returns the list of files written.
+    """
+    written = []
+    if TPROP:
+        phonon.run_mesh(MESH)
+        phonon.run_thermal_properties(t_min=TMIN, t_max=TMAX, t_step=TSTEP)
+        thermal_file = folder / "thermal_properties.yaml"
+        phonon.write_yaml_thermal_properties(filename=str(thermal_file))
+        written.append(thermal_file.name)
+
+    if IRREPS is not None:
+        qpoint, tolerance = IRREPS
+        phonon.set_irreps(qpoint, degeneracy_tolerance=tolerance)
+        if SHOW_IRREPS:
+            phonon.show_irreps(show_irreps=True)
+        start_folder = os.getcwd()
+        try:
+            os.chdir(folder)
+            phonon.write_yaml_irreps(show_irreps=SHOW_IRREPS)
+        finally:
+            os.chdir(start_folder)
+        written.append("irreps.yaml")
+    return written
 
 def lowest_band_frequency(bands):
     """
@@ -320,7 +455,7 @@ def phonon_loader(material_name, supercell, displacement):
     for model_folder in sorted(material_folder.iterdir()):
         if not model_folder.is_dir(): 
             continue
-        phonon = load_run_phonon(model_folder / f"sc{supercell}_d{displacement}")
+        phonon = load_run_phonon(model_folder / run_label(supercell, displacement))
         if phonon is not None:
             phonons[model_folder.name] = phonon
     return phonons
@@ -400,12 +535,12 @@ def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure
 
 def plot_run_bands(material_name, model_name, phonon, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
     """
-    One run (one model, supercell and displacement) with the reference underneath.
-    Saves results/<material>/<model>/sc<supercell>_d<displacement>/band_structure.png
+    One run (one model, supercell and displacement and symmetry on/off) with the reference underneath.
+    Saves results/<material>/<model>/<run label>/band_structure.png
     """
     return plot_bands(
         {model_name: phonon}, reference_phonon, band_path, band_labels,
-        title=f"{material_name}: {model_name}, sc{supercell}, displacement {displacement} A",
+        title=f"{material_name}: {model_name}, {run_label(supercell, displacement)}",
         figure_file=get_run_folder(material_name, model_name, supercell, displacement) / "band_structure.png",
         reference_label=reference_label,
     )
@@ -413,12 +548,12 @@ def plot_run_bands(material_name, model_name, phonon, reference_phonon, band_pat
 def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
     """
     Every model in "phonons" (model name -> Phonopy) on the same figure.
-    Saves results/<material>/band_comparison_sc<supercell>_d<displacement>.png
+    Saves results/<material>/band_comparison_<run label>.png
     """
     return plot_bands(
         phonons, reference_phonon, band_path, band_labels,
-        title=f"{material_name}: sc{supercell}, displacement {displacement} A",
-        figure_file=RESULTS_FOLDER / material_name / f"band_comparison_sc{supercell}_d{displacement}.png",
+        title=f"{material_name}: {run_label(supercell, displacement)}",
+        figure_file=RESULTS_FOLDER / material_name / f"band_comparison_{run_label(supercell, displacement)}.png",
         reference_label=reference_label,
     )
 
