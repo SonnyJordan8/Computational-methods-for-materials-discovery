@@ -174,7 +174,6 @@ SETTINGS = {
     "DTYPE":                     read_choice(["float64", "float32"]),
     "RUN_CALCULATIONS":          read_bool,
     "RUN_PLOTS_RUNS":            read_bool,
-    "RUN_PLOTS_MLIP_COMPARISON": read_bool,
     "IMAGINARY_LIMIT":           read_float,
     # ASE relaxation
     "OPTIMIZER":                 read_choice(["FIRE", "BFGS", "LBFGS", "BFGSLineSearch"]),
@@ -220,7 +219,7 @@ SETTINGS = {
 # and MAGMOM only applies to magnetic systems.
 OPTIONAL = {"IRREPS": None, "MAGMOM": None}
 
-def read_config(path):
+def read_config(path, strict = True):
     """
     Reads the config file at path. Returns a dictionary with every setting in SETTINGS,
     each turned into its Python type. Every setting must be in the file, except those in
@@ -243,6 +242,8 @@ def read_config(path):
             key = key.strip().upper()
             try:
                 if key not in SETTINGS:
+                    if not strict:
+                        continue
                     raise ValueError(f"unknown setting {key}")
                 if key in seen:
                     raise ValueError(f"{key} is set more than once")
@@ -252,7 +253,7 @@ def read_config(path):
                 raise ValueError(f"{path.name} line {line_number}: {error}") from None
 
     missing = [name for name in SETTINGS if name not in seen and name not in OPTIONAL]
-    if missing:
+    if missing and strict:
         raise ValueError(f"{path.name} is missing these settings: {', '.join(missing)}")
 
     config["_IN_FILE"] = seen
@@ -274,9 +275,9 @@ def changed_settings(saved_config_file):
     Returns a list of the calculation settings that differ, as "KEY: saved -> now".
     An empty list means the run was made with the same calculation settings.
     """
-    saved = read_config(saved_config_file)
-    return [f"{key}: {saved[key]!r} -> {CONFIG[key]!r}"
-            for key in CALCULATION_SETTINGS if saved[key] != CONFIG[key]]
+    saved = read_config(saved_config_file, strict=False)
+    return [f"{key}: {saved.get(key, 'not recorded')!r} -> {CONFIG[key]!r}"
+            for key in CALCULATION_SETTINGS if saved.get(key, "not recorded") != CONFIG[key]]
 
 # Phonopy setting tag -> (name of the same value in phonopy's own reader, how to compare it with ours)
 PHONOPY_TAGS = {
