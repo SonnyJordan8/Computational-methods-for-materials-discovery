@@ -1,34 +1,37 @@
 from datetime import datetime
+import shutil
 import numpy as np
 
+from MLIP_config import CONFIG, CONFIG_FILE, supercell_label
 from MLIP_parser import MATERIALS_CIF_FOLDER, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, MODELS
 from MLIP_parser import cif_parser, reference_data_parser
 from MLIP_processor import get_run_folder, get_space_group, get_primitive_cell, get_band_path
 from MLIP_processor import relax_structure, force_constant_calculator
 from MLIP_processor import band_calculator, save_bands, lowest_band_frequency, gamma_optical_frequency
-from MLIP_processor import results_table, phonon_loader, plot_band_comparison
+from MLIP_processor import phonon_properties
+from MLIP_processor import results_table, phonon_loader, plot_run_bands, plot_band_comparison
 from MLIP_processor import start_timer, performance_log
-from MLIP_processor import results_table, phonon_loader
-from MLIP_processor import plot_run_bands, plot_band_comparison
 
 # Settings
-# Change these before each run.
-MODEL = "MACE-MP-0-medium"   # one of the keys of MODELS
-DEVICE = "cpu"
-SUPERCELL = 1
-DISPLACEMENT = 0.03
-RUN_CALCULATIONS = False      # relax and calculate phonons with MODEL
+# All settings are in config_file.txt read by MLIP_config.py. 
 
-RUN_PLOTS_RUNS = True                    # one plot per saved run at SUPERCELL and DISPLACEMENT, every model
-RUN_PLOTS_MLIP_COMPARISON = True        # every model with saved results at SUPERCELL and DISPLACEMENT on one plot
+print(f"settings from {CONFIG_FILE}")
 
-IMAGINARY_LIMIT = -0.05   # THz, a frequency below this counts as an imaginary mode - Batatia et al. 2025
+MODEL = CONFIG["MODEL"]                     
+DEVICE = CONFIG["DEVICE"]
+DTYPE = CONFIG["DTYPE"]                     
+RUN_CALCULATIONS = CONFIG["RUN_CALCULATIONS"]
+RUN_PLOTS_RUNS = CONFIG["RUN_PLOTS_RUNS"]
+RUN_PLOTS_MLIP_COMPARISON = CONFIG["RUN_PLOTS_MLIP_COMPARISON"]
+IMAGINARY_LIMIT = CONFIG["IMAGINARY_LIMIT"] 
+MATERIALS = CONFIG["MATERIALS"]            
+REFERENCES = CONFIG["REFERENCES"]           
+SUPERCELL_MATRIX = CONFIG["DIM"]            
+SUPERCELL = supercell_label(SUPERCELL_MATRIX)  
+DISPLACEMENT = CONFIG["DISPLACEMENT_DISTANCE"]  
 
-# Materials in materials_cif that are being calculated
-MATERIALS = ["K3MnCrO8"]
-# phononDB id for any material that can't be matched automatically by formula + space group,
-# e.g. {"Si": "mp-149"}. Materials not listed here are matched automatically
-REFERENCES = {}
+if MODEL not in MODELS:
+    raise ValueError(f"MODEL {MODEL!r} is not in MODELS. Choose one of {list(MODELS.keys())}")
 
 # Parse
 # Materials come from the CIF files, reference data from the phononDB folder or Phonopy_params.yaml files
@@ -61,6 +64,7 @@ if RUN_CALCULATIONS:
             # Each run gets its own folder, e.g. results/Si/MACE-MP-0-medium/sc3_d0.03
             folder = get_run_folder(material_name, model_name=MODEL, supercell=SUPERCELL, displacement=DISPLACEMENT)
             folder.mkdir(parents=True, exist_ok=True)
+            shutil.copy(CONFIG_FILE, folder / CONFIG_FILE.name)
 
             # Space group of the CIF structure, found by the parser
             space_group_before = materials[material_name].info["space_group_symbol"]
@@ -71,7 +75,7 @@ if RUN_CALCULATIONS:
             # Stage 1: relaxation
             stage = "relaxation"
             timer = start_timer()
-            converged, steps = relax_structure(atoms, calc, folder)
+            converged, steps, energy_change = relax_structure(atoms, calc, folder)
             relax_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
             # Largest force left on any atom after relaxation
             max_force = float(np.abs(atoms.get_forces()).max())
@@ -87,7 +91,7 @@ if RUN_CALCULATIONS:
             # Stage 2: force constants
             stage = "force constants"
             timer = start_timer()
-            phonon = force_constant_calculator(atoms, calc, supercell=SUPERCELL, displacement=DISPLACEMENT, folder=folder)
+            phonon = force_constant_calculator(atoms, calc, supercell=SUPERCELL_MATRIX, displacement=DISPLACEMENT, folder=folder)
             forces_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
 
             # Stage 3: band structure
@@ -101,6 +105,14 @@ if RUN_CALCULATIONS:
             bands_time = performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
             # Imaginary modes show up as negative frequencies
             imaginary_modes = lowest_frequency < IMAGINARY_LIMIT
+            
+            # Stage 4: optional post-processing (thermal properties, irreducible representations)
+            stage = "phonon properties"
+            timer = start_timer()
+            property_files = phonon_properties(phonon, folder)
+            if property_files:
+                performance_log(material_name, MODEL, DEVICE, SUPERCELL, DISPLACEMENT, stage, timer)
+                print(f"phonon properties written: {', '.join(property_files)}")
 
             # Compare with the reference data, as a percentage difference
             stage = "reference comparison"
@@ -111,7 +123,7 @@ if RUN_CALCULATIONS:
                 gamma_diff = (gamma_optical - ref_gamma_optical) / ref_gamma_optical * 100
 
             # Print the results
-            print(f"relaxation converged: {converged} ({steps} steps, max force {max_force:.5f} eV/A)")
+            print(f"relaxation converged: {converged} ({steps} steps, max force {max_force:.5f} eV/A, "f"last energy change {energy_change:.2e} eV/atom)")
             print(f"space group: {space_group_before} -> {space_group_after}")
             print(f"volume per atom: {volume_per_atom:.3f} A^3")
             print(f"Gamma optical frequency: {gamma_optical:.2f} THz")
