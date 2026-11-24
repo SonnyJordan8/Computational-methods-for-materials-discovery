@@ -2,10 +2,10 @@ from datetime import datetime
 import shutil
 import numpy as np
 
-from MLIP_config import CONFIG, CONFIG_FILE, supercell_label
+from MLIP_config import CONFIG, CONFIG_FILE, supercell_label, changed_settings
 from MLIP_parser import MATERIALS_CIF_FOLDER, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, MODELS
 from MLIP_parser import cif_parser, reference_data_parser
-from MLIP_processor import get_run_folder, get_space_group, get_primitive_cell, get_band_path
+from MLIP_processor import run_label, get_run_folder, get_space_group, get_primitive_cell, get_band_path
 from MLIP_processor import relax_structure, force_constant_calculator
 from MLIP_processor import band_calculator, save_bands, lowest_band_frequency, gamma_optical_frequency
 from MLIP_processor import phonon_properties
@@ -61,10 +61,20 @@ if RUN_CALCULATIONS:
         print(f"\n===== {material_name} | {MODEL} =====")
         stage = "set up"
         try:
-            # Each run gets its own folder, e.g. results/Si/MACE-MP-0-medium/sc3_d0.03
+            # Each run gets its own folder, e.g. results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-on
             folder = get_run_folder(material_name, model_name=MODEL, supercell=SUPERCELL, displacement=DISPLACEMENT)
             folder.mkdir(parents=True, exist_ok=True)
-            shutil.copy(CONFIG_FILE, folder / CONFIG_FILE.name)
+
+            # A folder may only be reused by a run with the same calculation settings,
+            # so an earlier run is never overwritten by one calculated differently
+            saved_config = folder / "run_config.txt"
+            if saved_config.exists():
+                changes = changed_settings(saved_config)
+                if changes:
+                    raise ValueError(f"{folder.name} already holds a run with different settings ("
+                                     + "; ".join(changes) + "). Delete or rename that folder to rerun it.")
+            # Keep a copy of the settings with the run, as a record of how it was calculated
+            shutil.copy(CONFIG_FILE, saved_config)
 
             # Space group of the CIF structure, found by the parser
             space_group_before = materials[material_name].info["space_group_symbol"]
