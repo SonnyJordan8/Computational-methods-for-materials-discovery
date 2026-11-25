@@ -6,8 +6,7 @@ from MLIP_parser import cif_parser, reference_data_parser
 from MLIP_processor import RESULTS_FOLDER, load_run_phonon, get_primitive_cell, get_band_path, plot_bands
 
 # Settings - change these before each plot
-INPUT_PLOT_FILE = "mlip_plotter_input.txt"      # the plot file, relative to the code folder
-TITLE = "Si: SevenNet-Omni-i12 vs MACE"                    # the figure title
+INPUT_PLOT_FILE = "mlip_plotter_input.txt"      # the plot file, relative to the code folder                 # the figure title
 
 # Line styles for the runs of one model, in order
 LINE_STYLES = ["-", "--", ":", "-."]
@@ -22,7 +21,7 @@ def read_input_plot_file(path):
     if not path.exists():
         raise FileNotFoundError(f"plot file not found: {path}")
 
-    plot = {"MATERIAL": None, "REFERENCE": "AUTO", "RUNS": []}
+    plot = {"MATERIAL": None, "TITLE": None, "REFERENCE": "AUTO", "RUNS": []}
     with open(path) as file:
         for line_number, line in enumerate(file, start=1):
             text = line.split("#", 1)[0].strip()
@@ -37,14 +36,18 @@ def read_input_plot_file(path):
                 plot["RUNS"].append(value)      # RUN may appear many times, once per run
             elif key in ("MATERIAL", "REFERENCE"):
                 plot[key] = value
+            elif key in ("MATERIAL", "TITLE", "REFERENCE"):
+                plot[key] = value
             else:
                 raise ValueError(f"{path.name} line {line_number}: unknown setting {key} "
-                                 f"(use MATERIAL, REFERENCE or RUN; the title is set at the top of MLIP_plotter.py)")
+                                 f"use MATERIAL, TITLE, REFERENCE or RUN")
 
     if not plot["MATERIAL"]:
         raise ValueError(f"{path.name}: MATERIAL is missing")
     if not plot["RUNS"]:
         raise ValueError(f"{path.name}: no RUN lines - add one per run to plot")
+    if not plot["TITLE"]:
+        plot["TITLE"] = plot["MATERIAL"]
     return plot
 
 
@@ -88,7 +91,7 @@ def run_styles(runs):
     return styles
 
 
-def make_comparison_plot(plot_file, title):
+def make_comparison_plot(plot_file):
     """
     Makes the figure described by one plot file and returns the path it was saved to.
     """
@@ -130,10 +133,10 @@ def make_comparison_plot(plot_file, title):
 
     figure_file = RESULTS_FOLDER / material_name / f"comparison_{plot_file.stem}.png"
     return plot_bands(datasets, reference_phonon, band_path, band_labels,
-                      title=title, figure_file=figure_file, reference_label=reference_label,
+                      title=plot["TITLE"], figure_file=figure_file, reference_label=reference_label,
                       styles=run_styles(list(datasets.keys())))
 
 
 # Make the plot
-figure_file = make_comparison_plot(CODE_FOLDER / INPUT_PLOT_FILE, TITLE)
+figure_file = make_comparison_plot(CODE_FOLDER / INPUT_PLOT_FILE)
 print(f"comparison plot: {figure_file}")
