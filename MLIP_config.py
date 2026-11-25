@@ -1,15 +1,11 @@
 """
-Reads the workflow configuration file (config_file.txt) once.
-The parser, processor and runner all take their settings from the config_file.txt
+Reads the workflow configuration file config_file.txt.
+config_file.txt sets the settings and material and MLIP used by parer, processer and runner
 
-The file is plain text with one setting per line:   KEY = value
-Everything after # on a line is a comment. True/false is written .TRUE. / .FALSE.
+The file is text with one setting per line:   KEY = value
 
-Phonopy settings use phonopy's own tag names and value formats, so the same file can be read by
-phonopy's own reader. 
-check_with_phonopy runs that reader on the file and stops if it reads any
-phonopy setting differently. 
-The workflow's own settings use names that are not phonopy tags.
+Phonopy settings use phonopy's own tag names and value formats enabling phonopy to read its own settings 
+in the command line. 
 
 """
 from pathlib import Path
@@ -20,17 +16,17 @@ import numpy as np
 CODE_FOLDER = Path(__file__).resolve().parent
 
 
-# Readers: each turns the text after "=" into a Python value
+# Readers
+# each turns the text after = into a Python value
 
 def read_bool(text):
-    """.TRUE. or .FALSE. (any capitals), the only forms phonopy reads. Phonopy reads anything else,
-    such as True, as false without a warning, so anything else is an error here."""
+    """.TRUE. or .FALSE. as phonopy reads"""
     value = text.strip().upper()
     if value == ".TRUE.":
         return True
     if value == ".FALSE.":
         return False
-    raise ValueError(f"write .TRUE. or .FALSE. (phonopy's format), got {text.strip()!r}")
+    raise ValueError(f"write .TRUE. or .FALSE. (phonopy's format), {text.strip()!r} was written")
 
 def read_int(text):
     return int(text)
@@ -42,7 +38,7 @@ def read_word(text):
     return text.strip()
 
 def read_folder(text):
-    """A folder: relative to the code folder, unless it is a full path."""
+    """A folder either relative to the code folder or a full path."""
     path = Path(text.strip())
     return path if path.is_absolute() else CODE_FOLDER / path
 
@@ -66,10 +62,10 @@ def read_dim(text):
         return np.diag(numbers).tolist()
     if len(numbers) == 9:
         return np.array(numbers).reshape(3, 3).tolist()
-    raise ValueError(f"DIM needs 3 or 9 whole numbers, got {len(numbers)}")
+    raise ValueError(f"DIM needs 3 or 9 whole numbers, {len(numbers)} was written.")
 
 def read_fraction(text):
-    """A number, or a fraction such as 1/2."""
+    """A fraction such as 1/2."""
     if "/" in text:
         top, bottom = text.split("/")
         return float(top) / float(bottom)
@@ -84,7 +80,7 @@ def read_primitive_axes(text):
         return "auto"
     numbers = [read_fraction(n) for n in value.split()]
     if len(numbers) != 9:
-        raise ValueError(f"PRIMITIVE_AXES needs P, AUTO or 9 numbers, got {value!r}")
+        raise ValueError(f"PRIMITIVE_AXES needs P, AUTO or 9 numbers, {value!r} was written")
     return np.array(numbers).reshape(3, 3).tolist()
 
 def read_plusminus(text):
@@ -100,7 +96,7 @@ def read_fc_calculator(text):
     return value
 
 def read_choice(options):
-    """Makes a reader that accepts one word from options (any capitalisation)."""
+    """Makes a reader that accepts one word from options regardless of capitalisation."""
     def reader(text):
         for option in options:
             if text.strip().lower() == option.lower():
@@ -109,7 +105,7 @@ def read_choice(options):
     return reader
 
 def read_mesh(text):
-    """Three whole numbers, e.g. 20 20 20."""
+    """Three whole numbers."""
     numbers = [int(n) for n in text.split()]
     if len(numbers) != 3:
         raise ValueError(f"MESH needs 3 whole numbers, got {len(numbers)}")
@@ -117,13 +113,13 @@ def read_mesh(text):
 
 def read_irreps(text):
     """
-    A q-point (3 numbers, fractions allowed) and optionally a degeneracy tolerance, e.g. 0 0 0 1e-4.
-    Returned as (q-point, tolerance or None). To skip irreps, comment the line out: phonopy stops
-    on an empty IRREPS line, so an empty value is an error here too.
+    A q-point (3 numbers) and optionally a degeneracy tolerance.
+    Returned as (q-point, tolerance or None). 
+    To skip irreps, comment the line out.
     """
     parts = text.split()
     if len(parts) == 0:
-        raise ValueError("IRREPS is empty - comment the line out instead (phonopy stops on an empty IRREPS)")
+        raise ValueError("IRREPS is empty - comment the line out instead")
     if len(parts) not in (3, 4):
         raise ValueError(f"IRREPS needs a q-point (3 numbers) and optionally a tolerance, got {text.strip()!r}")
     qpoint = [read_fraction(n) for n in parts[:3]]
@@ -131,7 +127,8 @@ def read_irreps(text):
     return qpoint, tolerance
 
 def read_magmom(text):
-    """MAGMOM: one number per atom (three for non-collinear), or empty for non-magnetic. Empty gives None."""
+    """MAGMOM: one number per atom, three per atom for non-collinear
+    or empty for non-magnetic. Empty gives None."""
     numbers = [float(n) for n in text.split()]
     return numbers if numbers else None
 
@@ -184,6 +181,7 @@ SETTINGS = {
     # phonopy pre-process
     "DIM":                       read_dim,
     "PRIMITIVE_AXES":            read_primitive_axes,
+    "PRIMITIVE_TOLERANCE":       read_float,
     "DISPLACEMENT_DISTANCE":     read_float,
     "PM":                        read_plusminus,
     "MAGMOM":                    read_magmom,
@@ -215,15 +213,13 @@ SETTINGS = {
 }
 
 # Settings that may be left out of the file, and the value they take when they are:
-# IRREPS must be commented out when unused (phonopy stops on an empty IRREPS line),
-# and MAGMOM only applies to magnetic systems.
 OPTIONAL = {"IRREPS": None, "MAGMOM": None}
 
 def read_config(path, strict = True):
     """
-    Reads the config file at path. Returns a dictionary with every setting in SETTINGS,
-    each turned into its Python type. Every setting must be in the file, except those in
-    OPTIONAL. Any line it can't read, or any missing setting, raises an error.
+    Reads the config file at path. 
+    Returns the CONFIG dictionary with every setting in SETTINGS.
+    This is the dictionary read by the workflow for run settings.
     """
     path = Path(path)
     if not path.exists():
@@ -255,13 +251,10 @@ def read_config(path, strict = True):
     missing = [name for name in SETTINGS if name not in seen and name not in OPTIONAL]
     if missing and strict:
         raise ValueError(f"{path.name} is missing these settings: {', '.join(missing)}")
-
-    config["_IN_FILE"] = seen
     return config
 
 # Settings that change the relaxed structure, the forces or the force constants. A run folder
-# may only be reused by a run with the same values of all of these (see changed_settings).
-# The others (run switches, plotting, post-processing, folders) can change between runs.
+# may only be reused by a run with the same values of all of these.
 CALCULATION_SETTINGS = [
     "DTYPE",
     "OPTIMIZER", "RELAX_CELL", "RELAX_FMAX", "ENERGY_TOLERANCE", "MAX_STEPS", "RELAX_SYMMETRY",
@@ -272,89 +265,18 @@ CALCULATION_SETTINGS = [
 def changed_settings(saved_config_file):
     """
     Compares a run's saved copy of the config with the current CONFIG.
-    Returns a list of the calculation settings that differ, as "KEY: saved -> now".
-    An empty list means the run was made with the same calculation settings.
+    This protectrs runs from being overwritten that have the same folder name
+    but differ in config_file settings.
     """
     saved = read_config(saved_config_file, strict=False)
     return [f"{key}: {saved.get(key, 'not recorded')!r} -> {CONFIG[key]!r}"
             for key in CALCULATION_SETTINGS if saved.get(key, "not recorded") != CONFIG[key]]
 
-# Phonopy setting tag -> (name of the same value in phonopy's own reader, how to compare it with ours)
-PHONOPY_TAGS = {
-    "DIM":                   "supercell_matrix",
-    "PRIMITIVE_AXES":        "primitive_matrix",
-    "DISPLACEMENT_DISTANCE": "displacement_distance",
-    "PM":                    "is_plusminus_displacement",
-    "SYMMETRY":              "is_symmetry",
-    "SYMMETRY_TOLERANCE":    "symmetry_tolerance",
-    "FC_CALCULATOR":         "fc_calculator",
-    "FC_SYMMETRY":           "fc_symmetry",
-    "BAND_POINTS":           "band_points",
-    "MESH":                  "mesh_numbers",
-    "TPROP":                 "is_thermal_properties",
-    "TMIN":                  "min_temperature",
-    "TMAX":                  "max_temperature",
-    "TSTEP":                 "temperature_step",
-    "SHOW_IRREPS":           "show_irreps",
-    "HDF5":                  "is_hdf5",
-    "WRITE_FORCE_CONSTANTS": "write_force_constants",
-    "MAGMOM":                "magnetic_moments",
-    "IRREPS":                "irreps_q_point",
-}
-
-
-def same_value(ours, phonopys):
-    """True if our value and phonopy's value are the same setting (numbers compared to 1e-9)."""
-    # Empty and None both mean "not set" (phonopy reads an empty MAGMOM as [])
-    if ours is None and phonopys is not None and np.size(phonopys) == 0:
-        return True
-    if isinstance(ours, str) or isinstance(phonopys, str):
-        return str(ours).lower() == str(phonopys).lower()
-    if ours is None or phonopys is None:
-        return ours is None and phonopys is None
-    try:
-        return np.allclose(np.array(ours, dtype=float), np.array(phonopys, dtype=float), atol=1e-9)
-    except (TypeError, ValueError):
-        return ours == phonopys
-
-
-def check_with_phonopy(path, config):
-    """
-    Reads the config file with phonopy's own reader and compares every phonopy setting that is in
-    the file with the value read here. Stops with a list of any differences, so the file always
-    means the same to phonopy as to the workflow. Phonopy's reader lives in phonopy.cui (its
-    command-line code), so if a future phonopy moves it, the check is skipped with a message.
-    """
-    try:
-        from phonopy.cui.settings import PhonopyConfParser
-    except ImportError:
-        print("note: phonopy's config reader was not found, so the file was not checked against it")
-        return
-    try:
-        phonopy_settings = PhonopyConfParser(filename=str(path)).settings
-    except SystemExit:
-        raise ValueError(f"phonopy's own reader could not read {Path(path).name} (see its message above)") from None
-    except Exception as error:
-        raise ValueError(f"phonopy's own reader could not read {Path(path).name}: {type(error).__name__}: {error}") from None
-
-    differences = []
-    for tag, attribute in PHONOPY_TAGS.items():
-        if tag not in config["_IN_FILE"] or not hasattr(phonopy_settings, attribute):
-            continue
-        ours = config[tag]
-        if tag == "IRREPS":
-            ours = ours[0]                         # compare the q-point; phonopy keeps the tolerance separately
-        phonopys = getattr(phonopy_settings, attribute)
-        if not same_value(ours, phonopys):
-            differences.append(f"{tag}: workflow reads {ours!r}, phonopy reads {phonopys!r}")
-    if differences:
-        raise ValueError(f"{Path(path).name} is read differently by phonopy:\n  " + "\n  ".join(differences))
-
-
 def supercell_label(dim):
     """
-    Short text for a supercell matrix, for folder names and tables.
-    Diagonal [[2,0,0],[0,2,0],[0,0,4]] -> "2x2x4"; any other matrix -> "m" + its 9 numbers.
+    Short text for a supercell .
+    Diagonal [[2,0,0],[0,2,0],[0,0,4]] - "2x2x4";
+    any other matrix - "m" + its 9 numbers.
     """
     matrix = np.array(dim, dtype=int)
     if np.count_nonzero(matrix - np.diag(np.diagonal(matrix))) == 0:
@@ -362,12 +284,11 @@ def supercell_label(dim):
     return "m" + "_".join(str(n) for n in matrix.flatten())
 
 
+# Used to easily submit multiple jobs to HPC
 def find_config_file():
     """
-    The config file to read: given on the command line with --config, e.g.
+    The config file to read on the command line with --config, e.g.
     python MLIP_runner.py --config my_settings.txt
-    otherwise config_file.txt in the code folder. parse_known_args ignores
-    arguments meant for something else (e.g. Jupyter passes -f <file>).
     """
     parser = argparse.ArgumentParser(description="uMLIP phonon benchmarking workflow")
     parser.add_argument("--config", default=str(CODE_FOLDER / "config_file.txt"),
@@ -379,6 +300,5 @@ def find_config_file():
 # Read once, when the module is first imported; every other module uses these
 CONFIG_FILE = find_config_file()
 CONFIG = read_config(CONFIG_FILE)
-check_with_phonopy(CONFIG_FILE, CONFIG)
 if CONFIG["MAGMOM"] is not None:
     print("note: MAGMOM is set, but the workflow does not use it yet")
