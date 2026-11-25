@@ -19,10 +19,11 @@ import phonopy
 from phonopy import Phonopy
 from phonopy.file_IO import write_FORCE_SETS, write_FORCE_CONSTANTS, write_force_constants_to_hdf5
 from phonopy.structure.atoms import PhonopyAtoms
+from phonopy.structure.cells import get_primitive, guess_primitive_matrix
 from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
 
 # Settings for calculations can be changed in the config_file.txt
-from MLIP_config import CONFIG
+from MLIP_config import CONFIG, read_config
 
 
 # Settings - all set in config_file.txt, read by MLIP_config.py
@@ -31,18 +32,17 @@ from MLIP_config import CONFIG
 RESULTS_FOLDER = CONFIG["RESULTS_FOLDER"]
 
 # ASE relaxation
-OPTIMIZER = CONFIG["OPTIMIZER"]             # "FIRE", "BFGS", "LBFGS" or "BFGSLineSearch"
+OPTIMIZER = CONFIG["OPTIMIZER"] 
+OPTIMIZERS = {"FIRE": FIRE, "BFGS": BFGS, "LBFGS": LBFGS, "BFGSLineSearch": BFGSLineSearch}
 RELAX_CELL = CONFIG["RELAX_CELL"]           # relax the cell as well as the atom positions
 FMAX = CONFIG["RELAX_FMAX"]                 # relaxation stops when all forces are below this, eV/Angstrom
 ENERGY_TOLERANCE = CONFIG["ENERGY_TOLERANCE"]  # ...and the energy change per step is below this, eV/atom (0 = off)
 MAX_STEPS = CONFIG["MAX_STEPS"]             # stops a stuck relaxation
 RELAX_SYMMETRY = CONFIG["RELAX_SYMMETRY"]   # keep the starting space group during relaxation
 
-# The ASE optimiser class for each OPTIMIZER name
-OPTIMIZERS = {"FIRE": FIRE, "BFGS": BFGS, "LBFGS": LBFGS, "BFGSLineSearch": BFGSLineSearch}
-
 # Phonopy
 PRIMITIVE_AXES = CONFIG["PRIMITIVE_AXES"]   # "P", "auto" or a 3x3 matrix
+PRIMITIVE_TOLERANCE = CONFIG["PRIMITIVE_TOLERANCE"] # float setting for distance tolerance of atom from primitive position
 IS_PLUSMINUS = CONFIG["PM"]                 # displace in both + and - directions (phonopy tag PM)
 SYMMETRY = CONFIG["SYMMETRY"]               # use crystal symmetry to reduce the displacements
 SYMMETRY_TOLERANCE = CONFIG["SYMMETRY_TOLERANCE"]
@@ -60,12 +60,10 @@ SHOW_IRREPS = CONFIG["SHOW_IRREPS"]         # also print the irreducible represe
 HDF5 = CONFIG["HDF5"]                       # write band structure and force constants as .hdf5
 WRITE_FORCE_CONSTANTS = CONFIG["WRITE_FORCE_CONSTANTS"]   # save the force constants too
 
-# Files saved in each run folder (the same layout as phononDB): the structure and displacements
-# in a small yaml file, and the forces in a separate FORCE_SETS file. The force constants are
-# not saved - they are recomputed from FORCE_SETS when a run is loaded, because a saved force
-# constant matrix gets very large for big supercells.
+# Displacements, force sets and the config file for this run
 DISPLACEMENTS_FILE = CONFIG["DISPLACEMENTS_FILE"]
 FORCE_SETS_FILE = CONFIG["FORCE_SETS_FILE"]
+RUN_CONFIG_FILE = "run_config.txt"
 
 # Column names of results/summary.csv
 CSV_COLUMNS = [
@@ -122,7 +120,7 @@ def performance_log(material_name, model_name, device, supercell, displacement, 
     RESULTS_FOLDER.mkdir(parents = True, exist_ok = True)
     csv_file = RESULTS_FOLDER / "performance_log.csv"
     is_new = not csv_file.exists()
-    with open(csv_file, "a", newline="") as file:
+    with open(csv_file, "a", newline = "") as file:
         writer = csv.writer(file)
         if is_new:
             writer.writerow(PERFORMANCE_COLUMNS)
@@ -134,33 +132,33 @@ def performance_log(material_name, model_name, device, supercell, displacement, 
         ])
     return wall_time
 
-# Run label generation for one run followed by Folder generation. 
-
-def run_label(supercell, displacement):
-    """
-    The name of a run folder; supercell, displacement and the symmetry settings, so runs with
-    symmetry on and off are kept apart:
-        sc2x2x2_d0.03_sym-on                  SYMMETRY, RELAX_SYMMETRY and FC_SYMMETRY all on
-        sc2x2x2_d0.03_sym-off                 SYMMETRY off (phonopy displacements)
-        sc2x2x2_d0.03_sym-off_relaxsym-off    and RELAX_SYMMETRY off (ASE relaxation)
-    RELAX_SYMMETRY and FC_SYMMETRY are only added to the name when they are off.
-    """
-    label = f"sc{supercell}_d{displacement}_sym-{'on' if SYMMETRY else 'off'}"
-    if not RELAX_SYMMETRY:
-        label = label + "_relaxsym-off"
-    if not FC_SYMMETRY:
-        label = label + "_fcsym-off"
-    return label
-
+# Folder label generation for one run
 def get_run_folder(material_name, model_name, supercell, displacement):
     """
-    Returns the folder for one run, e.g. results/Si/MACE-MP-0-medium/sc3_d0.03
+    Returns the folder for one run. Its name holds the supercell, the displacement and the
+    symmetry settings and the primitive axis settings
+    results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-on_pa-P - all symmetry settings on and primitive cell is cif file cell
+    results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-off_relaxsym-off_pa-auto - SYMMETRY off (phonopy) RELAX_SYMMETRY off (ASE)
+    , FC_SYMMETRY is on and primitive cell automatically calculated by phonopy
+    RELAX_SYMMETRY and FC_SYMMETRY are only added to the name when they are off.
+    Every other function that needs a run's folder or name calls this one.
     The folder is not created here.
 
     """
-    return RESULTS_FOLDER / material_name / model_name / run_label(supercell, displacement)
+    name = f"sc{supercell}_d{displacement}_sym-{'on' if SYMMETRY else 'off'}"
+    if not RELAX_SYMMETRY:
+        name = name + "_relaxsym-off"
+    if not FC_SYMMETRY:
+        name = name + "_fcsym-off"
 
-# Symmetry finder
+    if PRIMITIVE_AXES == "P":
+        name = name + "_pa-P"
+    elif PRIMITIVE_AXES == "auto":
+        name = name + "_pa-auto"
+    else:
+        name = name + "_pa-matrix"
+    return RESULTS_FOLDER / material_name / model_name / name
+
 
 def get_space_group(material):
     """
@@ -174,15 +172,25 @@ def get_space_group(material):
 
 def get_primitive_cell(material):
     """
-    Function finds the primitive cell using pymatgen and returns the 
-    ASE atoms object of the primitivie cell
+    Function finds the primitive cell from the input CIF file.
+    AUTO - phonopy finds the primitive cell, P - the CIF cell is used as primitive cell
+    and if a 9 digit array representing custom primitive cell is configured
+    that is used. 
+    PRIMITIVE_TOLERANCE is applied to starting cif file and is the distance an atom can be 
+    from their ideal positions and still count as the same site.
 
     """
-    structure_pmg = AseAtomsAdaptor.get_structure(material)
-    space_group_analyser = SpacegroupAnalyzer(structure_pmg)
-    primitive_structure_pmg = space_group_analyser.get_primitive_standard_structure()
-    primitive_structure_ase = AseAtomsAdaptor.get_atoms(primitive_structure_pmg)
-    return(primitive_structure_ase)
+    cell = PhonopyAtoms(symbols = material.get_chemical_symbols(), cell = material.cell.array, 
+                        scaled_positions = material.get_scaled_positions())
+    if PRIMITIVE_AXES == "auto":
+        matrix = guess_primitive_matrix(cell, symprec = PRIMITIVE_TOLERANCE)
+    elif PRIMITIVE_AXES == "P":
+        matrix = ((1,0,0),(0,1,0),(0,0,1))
+    else:
+        matrix = np.array(PRIMITIVE_AXES)
+    primitive = get_primitive(cell, matrix, symprec = PRIMITIVE_TOLERANCE)
+    return Atoms(symbols = primitive.symbols, cell = primitive.cell,
+                 scaled_positions = primitive.scaled_positions, pbc = True)
 
 def get_band_path(primitive_material):
     """
@@ -266,11 +274,10 @@ def relax_structure(material, calc, folder):
 def force_constant_calculator(material, calc, supercell, displacement, folder):
 
     """
-    Function thst calculates the displacements of the cell in phonopy,
+    Function that calculates the displacements of the cell in phonopy,
     the forces on the atoms in ASE and the force constants in phonopy.
     Saves phonopy_disp.yaml (structure and displacements) and FORCE_SETS
     (displacements and forces) in the folder. 
-
 
     """
     cell = PhonopyAtoms(
@@ -281,11 +288,12 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
 
     phonon = Phonopy(
         cell,
-        supercell_matrix=supercell,
-        primitive_matrix=PRIMITIVE_AXES,
-        symprec=SYMMETRY_TOLERANCE,
-        is_symmetry=SYMMETRY,
-        log_level=PHONOPY_LOG_LEVEL,
+        supercell_matrix = supercell,
+        # P as the primitive cell has already been found by get_primitive_cell function
+        primitive_matrix = "P",
+        symprec = SYMMETRY_TOLERANCE,
+        is_symmetry = SYMMETRY,
+        log_level = PHONOPY_LOG_LEVEL,
     )
 
     phonon.generate_displacements(distance = displacement, is_plusminus = IS_PLUSMINUS)
@@ -298,9 +306,9 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
         # Turn the phonopy structure back into an ASE structure
         displaced = Atoms(
             symbols=supercell_atoms.symbols,
-            cell=supercell_atoms.cell,
-            scaled_positions=supercell_atoms.scaled_positions,
-            pbc=True,
+            cell = supercell_atoms.cell,
+            scaled_positions = supercell_atoms.scaled_positions,
+            pbc = True,
         )
         displaced.calc = calc
         forces.append(displaced.get_forces())
@@ -310,34 +318,49 @@ def force_constant_calculator(material, calc, supercell, displacement, folder):
     
     if FC_SYMMETRY:
         phonon.symmetrize_force_constants()    
-    write_FORCE_SETS(phonon.dataset, filename=str(folder / FORCE_SETS_FILE)) 
+    write_FORCE_SETS(phonon.dataset, filename = str(folder / FORCE_SETS_FILE)) 
 
     if WRITE_FORCE_CONSTANTS:
         if HDF5:
-            write_force_constants_to_hdf5(phonon.force_constants, filename=str(folder / "force_constants.hdf5"))
+            write_force_constants_to_hdf5(phonon.force_constants, filename = str(folder / "force_constants.hdf5"))
         else:
-            write_FORCE_CONSTANTS(phonon.force_constants, filename=str(folder / "FORCE_CONSTANTS"))
+            write_FORCE_CONSTANTS(phonon.force_constants, filename = str(folder / "FORCE_CONSTANTS"))
     return phonon
     
 
 def load_run_phonon(run_folder):
     """
     Loads the saved phonons of one run folder (phonopy_disp.yaml and FORCE_SETS).
+    The force constants are rebuilt with the settings the run was calculated with, read from
+    its run_config.txt, so changing the config later does not change how old runs are plotted.
+    Any of these settings missing from run_config.txt (or a run folder with no run_config.txt)
+    take the current config's value, and a note says which.
     Returns None if the run folder has no saved phonons.
     """
     displacements_file = run_folder / DISPLACEMENTS_FILE
     force_sets_file = run_folder / FORCE_SETS_FILE
     if not (displacements_file.exists() and force_sets_file.exists()):
         return None
+    # The settings this run was calculated with, from its saved copy of the config
+    needed = ["SYMMETRY", "SYMMETRY_TOLERANCE", "FC_CALCULATOR", "FC_SYMMETRY"]
+    saved_config = run_folder / RUN_CONFIG_FILE
+    saved = read_config(saved_config, strict=False) if saved_config.exists() else {}
+    # Checks if all settings have a value for a run - if not the guesses used are printed in terminal
+    from_current = [name for name in needed if name not in saved]
+    if from_current:
+        print(f"note: {run_folder.parent.name}/{run_folder.name} has no saved value for "
+              f"{', '.join(from_current)}, so the current config's value is used")
+    settings = {name: saved.get(name, CONFIG[name]) for name in needed}
+
     return phonopy.load(
         str(displacements_file),
-        force_sets_filename=str(force_sets_file),
-        primitive_matrix=PRIMITIVE_AXES,
-        is_symmetry=SYMMETRY,
-        symprec=SYMMETRY_TOLERANCE,
-        fc_calculator=FC_CALCULATOR,
-        symmetrize_fc=FC_SYMMETRY,
-        log_level=PHONOPY_LOG_LEVEL,                     # quiet: runs are reloaded for every plot
+        force_sets_filename = str(force_sets_file),
+        primitive_matrix = "P",
+        is_symmetry = settings["SYMMETRY"],
+        symprec = settings["SYMMETRY_TOLERANCE"],
+        fc_calculator = settings["FC_CALCULATOR"],
+        symmetrize_fc = settings["FC_SYMMETRY"],
+        log_level = PHONOPY_LOG_LEVEL,
     )
 # Stage 3: Band structure
 
@@ -371,9 +394,9 @@ def save_bands(phonon, folder):
 
     """
     if HDF5:
-        phonon.write_hdf5_band_structure(filename=str(folder / "band.hdf5"))
+        phonon.write_hdf5_band_structure(filename = str(folder / "band.hdf5"))
     else:
-        phonon.write_yaml_band_structure(filename=str(folder / "band.yaml"))
+        phonon.write_yaml_band_structure(filename = str(folder / "band.yaml"))
 
 def phonon_properties(phonon, folder):
     """
@@ -387,20 +410,20 @@ def phonon_properties(phonon, folder):
     written = []
     if TPROP:
         phonon.run_mesh(MESH)
-        phonon.run_thermal_properties(t_min=TMIN, t_max=TMAX, t_step=TSTEP)
+        phonon.run_thermal_properties(t_min = TMIN, t_max = TMAX, t_step = TSTEP)
         thermal_file = folder / "thermal_properties.yaml"
-        phonon.write_yaml_thermal_properties(filename=str(thermal_file))
+        phonon.write_yaml_thermal_properties(filename = str(thermal_file))
         written.append(thermal_file.name)
 
     if IRREPS is not None:
         qpoint, tolerance = IRREPS
-        phonon.set_irreps(qpoint, degeneracy_tolerance=tolerance)
+        phonon.set_irreps(qpoint, degeneracy_tolerance = tolerance)
         if SHOW_IRREPS:
-            phonon.show_irreps(show_irreps=True)
+            phonon.show_irreps(show_irreps = True)
         start_folder = os.getcwd()
         try:
             os.chdir(folder)
-            phonon.write_yaml_irreps(show_irreps=SHOW_IRREPS)
+            phonon.write_yaml_irreps(show_irreps = SHOW_IRREPS)
         finally:
             os.chdir(start_folder)
         written.append("irreps.yaml")
@@ -433,36 +456,15 @@ def results_table(row):
     RESULTS_FOLDER.mkdir(parents = True, exist_ok = True)
     csv_file = RESULTS_FOLDER / "summary.csv"
     is_new = not csv_file.exists()
-    with open(csv_file, "a", newline="") as file:
+    with open(csv_file, "a", newline = "") as file:
         writer = csv.writer(file)
         if is_new:
             writer.writerow(CSV_COLUMNS)
         writer.writerow(row)
 
 
-# Load phonon band structures for comparison plot
-def phonon_loader(material_name, supercell, displacement):
-    """
-    Loads the saved phonons of every model that has been run for this material
-    with this supercell and displacement.
-    Returns a dictionary with the model name -> Phonopy object
-    """
-    phonons = {}
-    material_folder = RESULTS_FOLDER / material_name
-    if not material_folder.exists():
-        return phonons
-
-    for model_folder in sorted(material_folder.iterdir()):
-        if not model_folder.is_dir(): 
-            continue
-        phonon = load_run_phonon(model_folder / run_label(supercell, displacement))
-        if phonon is not None:
-            phonons[model_folder.name] = phonon
-    return phonons
-
-
 # Plots
-def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure_file, reference_label="REF"):
+def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure_file, reference_label="REF", styles = None):
     """
     Plots the band structure of every Phonopy object in "datasets" (label -> Phonopy)
     on the same figure, along the band path from get_band_path.
@@ -495,9 +497,12 @@ def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure
         if x_axis is None:
             x_axis = bands["distances"]
             connections = bands["connections"]
-        colour = f"C{colour_number}"    # matplotlib's default colour cycle
+        if styles is not None:
+            style = styles[label]
+        else:
+            style = {"color": f"C{colour_number}", "linestyle": "-"}    # matplotlib's default colour cycle
         for section in range(len(x_axis)):
-            lines = ax.plot(x_axis[section], bands["frequencies"][section], color=colour, linewidth=1.0)
+            lines = ax.plot(x_axis[section], bands["frequencies"][section], linewidth=1.0, **style)
             if section == 0:
                 lines[0].set_label(label)
         colour_number = colour_number + 1
@@ -517,43 +522,36 @@ def plot_bands(datasets, reference_phonon, band_path, band_labels, title, figure
             tick_labels.append(band_labels[label_number] + "|" + band_labels[label_number + 1])
             label_number = label_number + 2
 
+
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels)
     for position in tick_positions:
-        ax.axvline(position, color="grey", linewidth=0.5)
-    ax.axhline(0, color="grey", linewidth=0.5)
+        ax.axvline(position, color = "grey", linewidth = 0.5)
+    ax.axhline(0, color = "grey", linewidth = 0.5)
     ax.set_xlim(tick_positions[0], tick_positions[-1])
     ax.set_ylabel("Frequency (THz)")
     ax.set_title(title)
     ax.legend()
 
     figure_file = Path(figure_file)
-    figure_file.parent.mkdir(parents=True, exist_ok=True)
+    figure_file.parent.mkdir(parents = True, exist_ok = True)
     fig.savefig(str(figure_file), dpi=200)
     plt.close(fig)
     return figure_file
 
-def plot_run_bands(material_name, model_name, phonon, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
+def plot_run_bands(material_name, model_name, phonon, reference_phonon, band_path, band_labels, supercell, displacement, reference_label = "REF", colour = None):
     """
     One run (one model, supercell and displacement and symmetry on/off) with the reference underneath.
+    Colour of MLIP is determined by dictionary in MLIP_parser
     Saves results/<material>/<model>/<run label>/band_structure.png
     """
+    run_folder = get_run_folder(material_name, model_name, supercell, displacement)
+    styles = {model_name: {"color": colour, "linestyle": "-"}} if colour is not None else None
     return plot_bands(
         {model_name: phonon}, reference_phonon, band_path, band_labels,
-        title=f"{material_name}: {model_name}, {run_label(supercell, displacement)}",
-        figure_file=get_run_folder(material_name, model_name, supercell, displacement) / "band_structure.png",
-        reference_label=reference_label,
-    )
-
-def plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels, supercell, displacement, reference_label="REF"):
-    """
-    Every model in "phonons" (model name -> Phonopy) on the same figure.
-    Saves results/<material>/band_comparison_<run label>.png
-    """
-    return plot_bands(
-        phonons, reference_phonon, band_path, band_labels,
-        title=f"{material_name}: {run_label(supercell, displacement)}",
-        figure_file=RESULTS_FOLDER / material_name / f"band_comparison_{run_label(supercell, displacement)}.png",
-        reference_label=reference_label,
+        title = f"{material_name}: {model_name}, {run_folder.name}",
+        figure_file = run_folder / "band_structure.png",
+        reference_label = reference_label,
+        styles = styles,
     )
 
