@@ -10,10 +10,11 @@ from phonopy import Phonopy
 from phonopy.structure.atoms import PhonopyAtoms
 from phonopy.file_IO import parse_FORCE_CONSTANTS
 from monty.serialization import loadfn
+
 # Settings and materials are edited in the config file 
 from MLIP_config import CONFIG
 
-# Folders - all set in config_file.txt, read by MLIP_config.py
+# Folders - all set in config_file.txt
 # All starting material CIF files live here
 MATERIALS_CIF_FOLDER = CONFIG["MATERIALS_CIF_FOLDER"]
 # Kyoto (Togo) phonon database, set up with Kyoto_database_extractor.ipynb
@@ -31,7 +32,7 @@ def cif_parser(folder_path):
     """
     materials = {}
     for file in folder_path.glob("*.cif"):
-        structure = read(file, format="cif")
+        structure = read(file, format = "cif")
         structure_pmg = AseAtomsAdaptor.get_structure(structure)
         finder = SpacegroupAnalyzer(structure_pmg)
 
@@ -154,9 +155,9 @@ def phonon_db_parser(phonon_db_folder, lookup, mp_id):
     material_phonons = phonon_db_folder / "phonon_db" / Path(row["phonon_filepath"]).parent.name
     return phonopy.load(
         str(material_phonons / "phonon.yaml"),
-        force_sets_filename=str(material_phonons / "FORCE_SETS"),
-        primitive_matrix="auto",
-        is_nac=False
+        force_sets_filename = str(material_phonons / "FORCE_SETS"),
+        primitive_matrix = "auto",
+        is_nac = False
     )
 
 def mp_parser(mp_folder, mp_name):
@@ -182,14 +183,14 @@ def mp_parser(mp_folder, mp_name):
 
     structure = Structure.from_dict(settings["structure"])
     unit_cell = PhonopyAtoms(
-        symbols=[site.specie.symbol for site in structure],
-        cell=structure.lattice.matrix,
-        scaled_positions=structure.frac_coords,
+        symbols = [site.specie.symbol for site in structure],
+        cell = structure.lattice.matrix,
+        scaled_positions = structure.frac_coords,
     )
     # The reference's own supercell and primitive matrix, not DIM / PRIMITIVE_AXES from the config:
     # its force constants were calculated in its own supercell
     primitive_matrix = settings.get("primitive_matrix") or "auto"
-    phonon = Phonopy(unit_cell, supercell_matrix=settings["supercell_matrix"], primitive_matrix=primitive_matrix)
+    phonon = Phonopy(unit_cell, supercell_matrix = settings["supercell_matrix"], primitive_matrix = primitive_matrix)
 
     force_constants = parse_FORCE_CONSTANTS(str(force_constants_file))
     supercell_atoms = len(phonon.supercell)
@@ -248,7 +249,7 @@ def check_reference_cell(material_name, structure, phonon):
               f"(lengths differ by up to {length_diff:.1f} %, angles by up to {angle_diff:.1f} deg). "
               f"Check the band path labels before comparing.")
 
-def reference_data_parser(materials, phonon_db_folder=PHONON_DB_FOLDER, mp_folder=MP_REFERENCE_FOLDER, requested=None):
+def reference_data_parser(materials, phonon_db_folder = PHONON_DB_FOLDER, mp_folder = MP_REFERENCE_FOLDER, requested = None):
     """
     Finds and parses the reference phonons for every material.
     "requested" is the REFERENCES dictionary from the runner (soon to be config file)
@@ -321,10 +322,10 @@ def make_mace(device):
    except ImportError:
        raise ImportError("MACE is not installed. Please check you are working in the right conda environment.")
 
-   return mace_mp(model="medium", default_dtype="float64", device=device)
+   return mace_mp(model = "medium", default_dtype = CONFIG["DTYPE"], device = device)
 
 
-def make_prophet(device):
+def make_prophet(device, dtype = CONFIG["DTYPE"]):
   
   """ 
   Creates a Prophet-OAME-MBD calculator for the given device (GPU or CPU)
@@ -341,28 +342,25 @@ def make_prophet(device):
       from prophet import KairosCalculator
   except ImportError:
       raise ImportError("Prophet is not installed. Please check you are working in the right conda environment.") 
-  
-# use_kernel=False skips Prophet's GPU kernel, so it also runs on CPU - Prophet README
+# use_kernel = False skips Prophet's GPU kernel, so it also runs on CPU - Prophet README
   return KairosCalculator(model_path = str(PROPHET_WEIGHTS), use_kernel = False, device = device)
 
-def make_sevennet(device):
+def make_sevennet(device, dtype = CONFIG["DTYPE"]):
    """
    Creates a SevenNet-Omni-i12 calculator for a given device (CPU or GPU)
 
    """ 
    try:
        from sevenn.calculator import SevenNetCalculator
-    
    except ImportError:
         raise ImportError("SevenNet is not installed. Please check you are working in the right conda environment.")
-    
    return SevenNetCalculator(model = "7net-omni-i12", modal = "mpa", device = device)
 
 
 
-# Model name -> function that builds its calculator
+# Model name | function that builds its calculator | colour harde coded for the plots
 MODELS = {
-    "MACE-MP-0-medium": make_mace,
-    "Prophet-OAME-MBD": make_prophet,
-    "SevenNet-Omni-i12": make_sevennet,
+    "MACE-MP-0-medium":  {"function": make_mace,     "colour": "tab:blue"},
+    "SevenNet-Omni-i12": {"function": make_sevennet, "colour": "tab:orange"},
+    "Prophet-OAME-MBD":  {"function": make_prophet,  "colour": "tab:green"},
 }
