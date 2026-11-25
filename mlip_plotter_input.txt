@@ -1,0 +1,9 @@
+# Silicon: two models, and SevenNet at two supercells
+MATERIAL  = alpha-3R-In2Se3
+REFERENCE = AUTO
+RUN = Prophet-OAME-MBD/sc2x2x2_d0.03_sym-on_fcsym-off_pa-auto
+RUN = Prophet-OAME-MBD/sc2x2x2_d0.03_sym-on_pa-auto
+RUN = Prophet-OAME-MBD/sc3x3x3_d0.03_sym-on_fcsym-off_pa-auto
+RUN = Prophet-OAME-MBD/sc4x4x1_d0.03_sym-on_fcsym-off_pa-auto
+
+TITLE = alpha-3R-In2Se3: Prophet run comparisons 
