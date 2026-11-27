@@ -1,0 +1,14 @@
+# Conda environment for MACE-MP-0-medium (MODEL = MACE-MP-0-medium)
+
+# Conda environment for MACE-MP-0-medium
+name: mlip-mace
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - pip
+  - phonopy
+  - pymatgen
+  - ipykernel       
+  - pip:
+      - mace-torch     # pins e3nn 0.4.4
