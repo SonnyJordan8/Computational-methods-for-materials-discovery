@@ -9,7 +9,7 @@ from MLIP_processor import RESULTS_FOLDER, load_run_phonon, get_primitive_cell, 
 INPUT_PLOT_FILE = "mlip_plotter_input.txt"      # the plot file, relative to the code folder                 # the figure title
 
 # Line styles for the runs of one model, in order
-LINE_STYLES = ["-", "--", ":", "-."]
+LINE_STYLES = ["-", "-.", "--", ":"]
 
 
 def read_input_plot_file(path):
@@ -21,7 +21,7 @@ def read_input_plot_file(path):
     if not path.exists():
         raise FileNotFoundError(f"plot file not found: {path}")
 
-    plot = {"MATERIAL": None, "TITLE": None, "REFERENCE": "AUTO", "RUNS": []}
+    plot = {"MATERIAL": None, "TITLE": None, "FIGURE_NAME": None, "REFERENCE": "AUTO", "RUNS": []}
     with open(path) as file:
         for line_number, line in enumerate(file, start=1):
             text = line.split("#", 1)[0].strip()
@@ -34,13 +34,11 @@ def read_input_plot_file(path):
             value = value.strip()
             if key == "RUN":
                 plot["RUNS"].append(value)      # RUN may appear many times, once per run
-            elif key in ("MATERIAL", "REFERENCE"):
-                plot[key] = value
-            elif key in ("MATERIAL", "TITLE", "REFERENCE"):
+            elif key in ("MATERIAL", "TITLE", "FIGURE_NAME", "REFERENCE"):
                 plot[key] = value
             else:
                 raise ValueError(f"{path.name} line {line_number}: unknown setting {key} "
-                                 f"use MATERIAL, TITLE, REFERENCE or RUN")
+                                    f"use MATERIAL, TITLE, FIGURE_NAME, REFERENCE or RUN")
 
     if not plot["MATERIAL"]:
         raise ValueError(f"{path.name}: MATERIAL is missing")
@@ -48,6 +46,9 @@ def read_input_plot_file(path):
         raise ValueError(f"{path.name}: no RUN lines - add one per run to plot")
     if not plot["TITLE"]:
         plot["TITLE"] = plot["MATERIAL"]
+    if not plot["FIGURE_NAME"]:
+        plot["FIGURE_NAME"] = path.stem
+    plot["FIGURE_NAME"] = plot["FIGURE_NAME"].removesuffix(".png")
     return plot
 
 
@@ -131,7 +132,7 @@ def make_comparison_plot(plot_file):
         reference_phonon = references.get(material_name)
         reference_label = sources[material_name]
 
-    figure_file = RESULTS_FOLDER / material_name / f"comparison_{plot_file.stem}.png"
+        figure_file = RESULTS_FOLDER / material_name / f"comparison_{plot['FIGURE_NAME']}.png"
     return plot_bands(datasets, reference_phonon, band_path, band_labels,
                       title=plot["TITLE"], figure_file=figure_file, reference_label=reference_label,
                       styles=run_styles(list(datasets.keys())))
