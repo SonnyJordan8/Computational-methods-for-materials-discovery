@@ -1,0 +1,193 @@
+# Kyoto_database_extractor.ipynb
+
+**Role in the workflow:** one-off setup of the reference database. It downloads the Kyoto (Togo) phonon database and builds the lookup table that `MLIP_parser.py` uses to find DFT reference phonons for each material.
+
+It is **not** imported by any of the scripts. Run it once before the first `MLIP_runner.py` run, and again only if the database is updated.
+
+The README file that the `Kyoto_database_extractor.ipynb` is based on is saved under `README_KYOTOPhononDB.md`
+
+```
+GitHub (WMD-group/phononDB)
+   │  Cell 2: git clone
+   ▼
+phononDB/phonon_db_tarred/*.tar.lzma   (10,034 compressed archives)
+   │  extraction: done OUTSIDE the notebook (section 3)
+   ▼
+phononDB/phonon_db/mp-XXXX-20180417/   (one folder per material)
+   │  Cell 4: create_lookup_json.py
+   ▼
+phononDB/phonon_db_lookup_df.json      ──► MLIP_parser.reference_data_parser
+```
+
+## 1. What the notebook needs
+
+### Python packages
+
+| Package | Used for |
+|---|---|
+| `pathlib.Path` | Folder paths |
+| `pymatgen` | Reading each material's unit cell and space group (inside `create_lookup_json.py`) |
+| `phonopy` | Imported in Cell 1; used later by `MLIP_parser.py` to load the data |
+| `tqdm` | Progress bars (inside `create_lookup_json.py`) |
+| `pandas` | The lookup table is a pandas DataFrame |
+| `monty` (`loadfn`, `dumpfn`) | Saving and loading the lookup table as JSON |
+
+### Other requirements
+
+- **git** and **internet access** for the clone.
+- **Disk space:** about 3 GB (about 300 MB for the clone plus about 2.6 GB unpacked). The unpacked database is 10,034 folders and about 140,000 small files. If the project folder is synced to OneDrive or similar, the first sync takes a long time; consider excluding `phononDB/` from sync.
+- The same environment as the workflow (`mlip-mace` or `mlip-prophet`, see the top-level `README.md`) has everything needed.
+- Run the notebook from the project folder, so `phononDB/` ends up next to `MLIP_parser.py`. In Jupyter and VS Code the working directory is the notebook's own folder by default.
+
+## 2. Background: the Kyoto phonon database
+
+- Created by Atsushi Togo (Kyoto University). This is the **2018-04-17 release**, packaged on GitHub by the WMD group: https://github.com/WMD-group/phononDB
+- **10,034 materials**, each identified by its Materials Project id (e.g. `mp-149` is diamond Si).
+- Each material folder contains:
+
+| File | What it is |
+|---|---|
+| `POSCAR-unitcell` | The unit cell used in the DFT calculation (the conventional cell, e.g. 8 atoms for Si) |
+| `phonon.yaml` | Cell and supercell settings for phonopy |
+| `FORCE_SETS` | The DFT forces on the displaced supercells |
+| `BORN` | Born effective charges and dielectric tensor, for the non-analytical correction (4,908 of the 10,034 materials) |
+| `disp.yaml`, `POSCAR-unitcell.yaml`, `INCAR-*`, `KPOINTS-*`, `PAW_dataset.txt`, `phonopy.conf` | DFT and phonopy input settings, kept for reference |
+
+- The DFT functional is **PBEsol**, with no van der Waals correction.
+
+## 3. Order of steps
+
+1. Run **Cells 1–3** (imports, clone, check).
+2. **Extract the archives** (below). This is not done by the notebook.
+3. Run **Cells 4–5** (build and load the lookup table).
+
+### Extracting the archives
+
+The 10,034 materials arrive compressed in `phononDB/phonon_db_tarred/`. They must be unpacked into `phononDB/phonon_db/` before Cell 4, otherwise `create_lookup_json.py` stops with `FileNotFoundError: 'phonon_db'`.
+
+Each archive is named like `materials-id-149-si-fd-3m-227.tar.lzma` and unpacks to one folder, `mp-149-20180417/`.
+
+**The repository's own scripts.** Linux, macOS, or Git Bash / WSL on Windows:
+
+```bash
+cd phononDB
+bash extract_files_linux.sh        # extract_files_mac.sh on macOS
+cd ..
+```
+
+**Check:** `phononDB/phonon_db/` should contain 10,034 folders, including `mp-149-20180417/` with `phonon.yaml` and `FORCE_SETS` inside.
+
+---
+
+
+## 4. The cells, in order
+
+### Cell 1: imports
+
+Loads `phonopy`, `monty.loadfn`, `pandas`, `pathlib.Path`, `sys`, `subprocess` and `tarfile`.
+
+**Good to know:** some imports appear twice and `sys`, `subprocess` and `tarfile` are not used by the later cells. This does no harm.
+
+### Cell 2: clone the repository
+
+```python
+cloned_repo = Path("phononDB")
+if not cloned_repo.exists():
+    !git clone https://github.com/WMD-group/phononDB.git {cloned_repo}
+else:
+    print("Already cloned")
+```
+
+**What it does:** downloads the repository into `phononDB/`. If the folder already exists, the clone is skipped and the cell prints `Already cloned`.
+
+**Produces:** `phononDB/` containing the compressed data (`phonon_db_tarred/`), the helper scripts (`extract_files_linux.sh`, `extract_files_mac.sh`, `create_lookup_json.py`, `cleanup.sh`) and an `Examples/` folder.
+
+
+### Cell 3: list the repository contents
+
+```python
+for file in cloned_repo.glob("*"):
+    print(file.stem)
+```
+
+Prints the name of everything in `phononDB/`. A check that the clone worked.
+- Straight after cloning, the list includes `phon_db_tarred`-style entries: `phonon_db_tarred`, `create_lookup_json`, `extract_files_linux`, `README`, etc.
+- After extraction, `phonon_db` also appears.
+- After Cell 4, `phonon_db_lookup_df` also appears.
+
+### Cell 4: build the lookup table
+
+```python
+db_dir = Path.cwd() / "phononDB"
+%cd {db_dir}
+%run create_lookup_json.py
+%cd -
+```
+
+**What it does:** runs the repository's own `create_lookup_json.py`, which reads every material folder and writes one row per material to the lookup table.
+
+**Steps inside `create_lookup_json.py`:**
+1. Lists the folders in `phonon_db/`.
+2. Takes the material id from each folder name (`mp-149-20180417` → `mp-149`).
+3. Reads `POSCAR-unitcell` with pymatgen and works out the formula, elements and space group.
+4. Records the paths of `FORCE_SETS` and `phonon.yaml`.
+5. Saves the DataFrame with `dumpfn`.
+
+**Produces:** `phononDB/phonon_db_lookup_df.json`.
+
+### Cell 5: load and check the lookup table
+
+```python
+df = loadfn('phonon_db_lookup_df.json')
+df.head()
+```
+
+Loads the table and shows the first five rows, as a check.
+
+## 5. The lookup table
+
+`phononDB/phonon_db_lookup_df.json`: a pandas DataFrame with one row per material.
+
+| Column | Example (Si) | Used by `MLIP_parser.py` |
+|---|---|---|
+| `material_id` | `mp-149` | yes: matching and `REFERENCE_MP_IDS` |
+| `elements` | `[Si]` | no |
+| `formula_pretty_reduced` | `Si` | yes: automatic matching |
+| `formula` | `Si8` (formula of the unit cell) | no |
+| `num_elements` | `1` | no |
+| `chemsys` | `Si` | no |
+| `spacegroup_symbol` | `Fd-3m` | no |
+| `spacegroup_number` | `227` | yes: automatic matching |
+| `FORCE_SETS_filepath` | `.../mp-149-20180417/FORCE_SETS` | no (the parser builds the path itself) |
+| `phonon_filepath` | `.../mp-149-20180417/phonon.yaml` | yes: the folder name is taken from it |
+
+## 6. How the rest of the workflow uses it
+
+| What | Where | Relies on |
+|---|---|---|
+| Find a material's mp-id | `phonon_db_finder` in `MLIP_parser.py` | `material_id`, `formula_pretty_reduced`, `spacegroup_number` |
+| Load the reference phonons | `phonon_db_parser` in `MLIP_parser.py` | `phonon_filepath`, then `phonon.yaml` + `FORCE_SETS` in `phononDB/phonon_db/<folder>/` |
+| Folder location | `PHONON_DB_FOLDER` in `MLIP_parser.py` | `phononDB/` next to `MLIP_parser.py` |
+
+If `phononDB/phonon_db_lookup_df.json` is missing, `MLIP_parser.py` prints a message and uses the `reference_data/` folder only. The runner still works, just without phononDB references.
+
+## 7. When to re-run
+
+| Situation | What to run |
+|---|---|
+| First setup on a new machine | Cells 1–3, extraction (section 3), Cells 4–5 |
+| The phononDB repository was updated | `git pull` inside `phononDB/`, extraction, Cell 4 |
+| Moving to another machine (e.g. the supercomputer) | Clone and extract there, then Cell 4 there. Do not copy the lookup table across |
+| `phonon_db_lookup_df.json` deleted or corrupted | Cell 4 |
+
+## 8. Summary
+
+| Step | Does | Needs | Produces |
+|---|---|---|---|
+| Cell 1 | Imports | packages | |
+| Cell 2 | Clone | git, internet | `phononDB/` |
+| Cell 3 | Check | Cell 2 | printed file list |
+| Extraction | Unpack archives (outside the notebook) | Cell 2 | `phononDB/phonon_db/` (10,034 folders) |
+| Cell 4 | Build lookup | extraction, pymatgen, tqdm | `phononDB/phonon_db_lookup_df.json` |
+| Cell 5 | Check lookup | a `phonon_db_lookup_df.json` next to the notebook | DataFrame preview |
+

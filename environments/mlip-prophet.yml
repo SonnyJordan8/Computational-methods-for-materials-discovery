@@ -1,0 +1,14 @@
+# Conda environment for Prophet-OAME-MBD and SevenNet-Omni-i12
+name: mlip-prophet
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - pip
+  - git           
+  - phonopy
+  - pymatgen
+  - ipykernel       
+  - pip:
+      - "prophet-mlip @ git+https://github.com/kairosmaterial/prophet.git@dcfdc0b"
+      - "sevenn>=0.12" # Must have Omni

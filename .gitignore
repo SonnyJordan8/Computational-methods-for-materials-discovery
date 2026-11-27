@@ -1,0 +1,12 @@
+# Local data folder
+/weights/
+phononDB/
+/results/
+/materials_cif/
+/reference_data/
+
+# Python clutter
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+.env/
