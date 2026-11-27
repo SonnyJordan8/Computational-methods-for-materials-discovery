@@ -132,7 +132,7 @@ def make_comparison_plot(plot_file):
         reference_phonon = references.get(material_name)
         reference_label = sources[material_name]
 
-        figure_file = RESULTS_FOLDER / material_name / f"comparison_{plot['FIGURE_NAME']}.png"
+    figure_file = RESULTS_FOLDER / material_name / f"comparison_{plot['FIGURE_NAME']}.png"
     return plot_bands(datasets, reference_phonon, band_path, band_labels,
                       title=plot["TITLE"], figure_file=figure_file, reference_label=reference_label,
                       styles=run_styles(list(datasets.keys())))

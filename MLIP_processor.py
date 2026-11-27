@@ -199,7 +199,7 @@ def get_band_path(primitive_material):
     """
 
     structure_pmg = AseAtomsAdaptor.get_structure(primitive_material)
-    kpath_object = HighSymmKpath(structure_pmg)s
+    kpath_object = HighSymmKpath(structure_pmg)
     high_symm_points = kpath_object.kpath["kpoints"]
     band_path = []
     band_labels = []
