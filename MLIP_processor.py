@@ -67,7 +67,7 @@ RUN_CONFIG_FILE = "run_config.txt"
 
 # Column names of results/summary.csv
 CSV_COLUMNS = [
-    "date_time", "material", "model", "supercell", "displacement_A", "status",
+    "date_time", "material", "model", "supercell", "displacement_A","run", "status",
     "relax_converged", "relax_steps", "max_force_eV_per_A",
     "space_group_before", "space_group_after", "symmetry_kept",
     "volume_per_atom_A3",
@@ -199,21 +199,15 @@ def get_band_path(primitive_material):
     """
 
     structure_pmg = AseAtomsAdaptor.get_structure(primitive_material)
-    kpath_object = HighSymmKpath(structure_pmg)
-    # Dictionary, label -> q-point coordinates
+    kpath_object = HighSymmKpath(structure_pmg)s
     high_symm_points = kpath_object.kpath["kpoints"]
-    # band_path: one list of q-points per continuous section of the path
-    # band_labels: the label of every q-point, in the same order, as one flat list
     band_path = []
     band_labels = []
     for section in kpath_object.kpath["path"]:
         qpoints = []
         for label in section:
             qpoints.append(list(high_symm_points[label]))
-            # Greek labels such as \Gamma need $...$ so matplotlib draws the symbol
-            if label.startswith("\\"):
-                label = f"${label}$"
-            band_labels.append(label)
+            band_labels.append(f"${label}$")
         band_path.append(qpoints)
     return band_path, band_labels
 
@@ -332,7 +326,7 @@ def load_run_phonon(run_folder):
     """
     Loads the saved phonons of one run folder (phonopy_disp.yaml and FORCE_SETS).
     The force constants are rebuilt with the settings the run was calculated with, read from
-    its run_config.txt, so changing the config later does not change how old runs are plotted.
+    its run_config.txt.
     Any of these settings missing from run_config.txt (or a run folder with no run_config.txt)
     take the current config's value, and a note says which.
     Returns None if the run folder has no saved phonons.
