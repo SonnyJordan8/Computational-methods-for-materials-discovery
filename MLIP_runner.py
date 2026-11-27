@@ -5,12 +5,12 @@ import numpy as np
 from MLIP_config import CONFIG, CONFIG_FILE, supercell_label, changed_settings
 from MLIP_parser import MATERIALS_CIF_FOLDER, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, MODELS
 from MLIP_parser import cif_parser, reference_data_parser
-from MLIP_processor import run_label, get_run_folder, get_space_group, get_primitive_cell, get_band_path
+from MLIP_processor import get_run_folder, get_space_group, get_primitive_cell, get_band_path
 from MLIP_processor import relax_structure, force_constant_calculator
 from MLIP_processor import band_calculator, save_bands, lowest_band_frequency, gamma_optical_frequency
 from MLIP_processor import phonon_properties
-from MLIP_processor import results_table, phonon_loader, plot_run_bands, plot_band_comparison
-from MLIP_processor import start_timer, performance_log
+from MLIP_processor import results_table, plot_run_bands
+from MLIP_processor import start_timer, performance_log, RUN_CONFIG_FILE
 
 # Settings
 # All settings are in config_file.txt read by MLIP_config.py. 
@@ -22,7 +22,6 @@ DEVICE = CONFIG["DEVICE"]
 DTYPE = CONFIG["DTYPE"]                     
 RUN_CALCULATIONS = CONFIG["RUN_CALCULATIONS"]
 RUN_PLOTS_RUNS = CONFIG["RUN_PLOTS_RUNS"]
-RUN_PLOTS_MLIP_COMPARISON = CONFIG["RUN_PLOTS_MLIP_COMPARISON"]
 IMAGINARY_LIMIT = CONFIG["IMAGINARY_LIMIT"] 
 MATERIALS = CONFIG["MATERIALS"]            
 REFERENCES = CONFIG["REFERENCES"]           
@@ -34,7 +33,7 @@ if MODEL not in MODELS:
     raise ValueError(f"MODEL {MODEL!r} is not in MODELS. Choose one of {list(MODELS.keys())}")
 
 # Parse
-# Materials come from the CIF files, reference data from the phononDB folder or Phonopy_params.yaml files
+# Materials come from the CIF files, reference data from reference data folder
 materials = cif_parser(MATERIALS_CIF_FOLDER)
 if MATERIALS is not None:
     missing = [name for name in MATERIALS if name not in materials]
@@ -43,7 +42,7 @@ if MATERIALS is not None:
     materials = {name: materials[name] for name in MATERIALS}
 print(f"materials: {list(materials.keys())}")
 
-# Reference data comes form three sources currently
+# Reference data comes form two sources currently
 references, reference_sources = reference_data_parser(
     materials, PHONON_DB_FOLDER, MP_REFERENCE_FOLDER, requested=REFERENCES
 )
@@ -52,7 +51,7 @@ references, reference_sources = reference_data_parser(
 if RUN_CALCULATIONS:
     # Load the model once and time it
     timer = start_timer()
-    calc = MODELS[MODEL](DEVICE)
+    calc = MODELS[MODEL]["function"](DEVICE)
     load_time = performance_log("all", MODEL, DEVICE, SUPERCELL, DISPLACEMENT, "model load", timer)
     print(f"loaded {MODEL} in {load_time:.1f} s")
 
@@ -61,13 +60,13 @@ if RUN_CALCULATIONS:
         print(f"\n===== {material_name} | {MODEL} =====")
         stage = "set up"
         try:
-            # Each run gets its own folder, e.g. results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-on
+            # Each run gets its own folder, e.g. results/Si/MACE-MP-0-medium/sc2x2x2_d0.03_sym-on_pa-auto
             folder = get_run_folder(material_name, model_name=MODEL, supercell=SUPERCELL, displacement=DISPLACEMENT)
             folder.mkdir(parents=True, exist_ok=True)
 
             # A folder may only be reused by a run with the same calculation settings,
             # so an earlier run is never overwritten by one calculated differently
-            saved_config = folder / "run_config.txt"
+            saved_config = folder / RUN_CONFIG_FILE
             if saved_config.exists():
                 changes = changed_settings(saved_config)
                 if changes:
@@ -145,7 +144,7 @@ if RUN_CALCULATIONS:
             # Add one row to the results table, in the same order as CSV_COLUMNS
             stage = "saving results"
             results_table([
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), material_name, MODEL, SUPERCELL, DISPLACEMENT, "OK",
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), material_name, MODEL, SUPERCELL, DISPLACEMENT, folder.name, "OK",
                 converged, steps, max_force,
                 space_group_before, space_group_after, symmetry_kept,
                 volume_per_atom,
@@ -153,48 +152,23 @@ if RUN_CALCULATIONS:
                 lowest_frequency, imaginary_modes,
                 round(load_time, 2), round(relax_time, 2), round(forces_time, 2), round(bands_time, 2),
             ])
-            print(f"  saved to {folder}")
+            print(f"saved to {folder}")
+
+            # Band structure of this run against the reference.
+            if RUN_PLOTS_RUNS:
+                try:
+                    figure_file = plot_run_bands(material_name, MODEL, phonon, references.get(material_name),
+                                                 band_path, band_labels, SUPERCELL, DISPLACEMENT,
+                                                 reference_sources[material_name], colour = MODELS[MODEL]["colour"])
+                    print(f"  band plot: {figure_file}")
+                except Exception as error:
+                    print(f"  band plot CRASHED: {type(error).__name__}: {error}")
 
         except Exception as error:
             status = f"CRASHED in {stage}: {type(error).__name__}: {error}"
             print(f"{status}")
             results_table([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"), material_name, MODEL,
-                SUPERCELL, DISPLACEMENT, status,
+                SUPERCELL, DISPLACEMENT,  get_run_folder(material_name, MODEL, SUPERCELL, DISPLACEMENT).name, status,
             ])
-
-# Plots
-# All plots use SUPERCELL and DISPLACEMENT from the settings, and the saved results of every
-# earlier run, so they can be remade with RUN_CALCULATIONS = False.
-if RUN_PLOTS_RUNS or RUN_PLOTS_MLIP_COMPARISON:
-    for material_name in materials:
-        print(f"\n===== plots: {material_name} =====")
-        try:
-            reference_phonon = references.get(material_name)
-            reference_label = reference_sources[material_name]
-
-            # Band path from the primitive cell of the CIF structure, shared by every data set
-            band_path, band_labels = get_band_path(get_primitive_cell(materials[material_name]))
-
-            # Every model with saved results at this supercell and displacement
-            phonons = phonon_loader(material_name, SUPERCELL, DISPLACEMENT)
-            if len(phonons) == 0:
-                print(f"no saved results at sc{SUPERCELL}_d{DISPLACEMENT}")
-
-            # 1. One plot per run
-            if RUN_PLOTS_RUNS:
-                for model_name, phonon in phonons.items():
-                    figure_file = plot_run_bands(material_name, model_name, phonon, reference_phonon,
-                                                 band_path, band_labels, SUPERCELL, DISPLACEMENT, reference_label)
-                    print(f"run plot ({model_name}): {figure_file}")
-
-            # 2. All models on one plot
-            if RUN_PLOTS_MLIP_COMPARISON and len(phonons) > 0:
-                figure_file = plot_band_comparison(material_name, phonons, reference_phonon, band_path, band_labels,
-                                                   SUPERCELL, DISPLACEMENT, reference_label)
-                print(f"model comparison {list(phonons.keys())}: {figure_file}")
-
-            
-        except Exception as error:
-            print(f"{material_name}: plot CRASHED: {type(error).__name__}: {error}")
 
