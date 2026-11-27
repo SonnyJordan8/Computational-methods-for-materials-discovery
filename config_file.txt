@@ -2,14 +2,13 @@
 # RUN SETTINGS
 # These settings are checked and edited before every run
 
-MATERIALS = K3MnCrO8
+MATERIALS = alpha-3R-In2Se3
 MODEL = MACE-MP-0-medium
-REFERENCES = K3MnCrO8 mp-757140
+REFERENCES = alpha-3R-In2Se3 mp-19907
 DEVICE = cpu
 DTYPE = float64
-RUN_CALCULATIONS = .FALSE.
+RUN_CALCULATIONS = .TRUE.
 RUN_PLOTS_RUNS = .TRUE.
-RUN_PLOTS_MLIP_COMPARISON = .FALSE.
 IMAGINARY_LIMIT = -0.05 # THz
 
 # --------------------------------------------------------
@@ -36,7 +35,7 @@ ENERGY_TOLERANCE = 1e-5
 MAX_STEPS = 500
 
 # RELAX_SYMMETRY - keep the starting space group during relaxation
-RELAX_SYMMETRY = .TRUE.
+RELAX_SYMMETRY = .FALSE.
 
 # --------------------------------------------------------
 # PHONOPY SETTINGS - PREPROCESS
@@ -46,10 +45,13 @@ RELAX_SYMMETRY = .TRUE.
 DIM = 2 2 2
 
 # PRIMITIVE_AXES - the transformation matrix that converts the input cell
-# into the primitive cell. The runner already reduces each CIF to its primitive
-# cell. AUTO reorders the axes of rhombohedral and hexagonal cells, so the run
-# prints a warning for those; P keeps the cell as it is
-PRIMITIVE_AXES = AUTO
+# into the primitive cell, auto use phonopy primitive matrix guesser, P 
+# uses the structure of the input CIF file or 9 digits to describe the
+# primitive matrix can be used to customise the matrix. 
+PRIMITIVE_AXES = auto
+
+# PRIMITIVE_TOLERANCE - symmetry difference tolerance for phonopy in angstroms
+PRIMITIVE_TOLERANCE = 0.00001
 
 # DISPLACEMENT_DISTANCE - how many angstroms each atom is displaced
 # for the phonopy calculation
@@ -86,14 +88,12 @@ SYMMETRY_TOLERANCE = 1e-5
 FC_CALCULATOR = traditional
 
 # FC_SYMMETRY - .TRUE.: symmetrise the force constants after fitting
-FC_SYMMETRY = .TRUE.
+FC_SYMMETRY = .FALSE.
 # ---------------------------------------------------------
 # PHONOPY - POSTPROCESS
 
-# Folded band plots: a second supercell setting for post-processing needs its
-# own name (DIM is the calculation's supercell above). Planned as BAND_DIM once
-# the supercell folding is confirmed with the supervisor.
-# BAND_DIM = 2 2 2
+# Folded band plots - a second supercell setting for post-processing 
+# to be able to investigate band folding - to be added
 
 # BAND_POINTS - number of q-points per section of band path
 BAND_POINTS = 51
